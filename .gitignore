@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Окружения
+.venv/
+venv/
+env/
+
+# Секреты
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Данные и индексы
+data/runtime/
+qdrant_storage/
+*.sqlite
+*.db
+
+# Модели и кэш
+models/
+.cache/
+*.bin
+*.safetensors
+*.onnx
+
+# Логи и бэкапы
+logs/
+*.log
+backups/
+
+# Медиа, временные файлы
+tmp/
+*.tmp
+*.lock
+
+# IDE и ОС
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
