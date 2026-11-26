@@ -299,6 +299,11 @@ api("/api/health").then(h => {
     const slot = document.querySelector(".top-badges") || document.querySelector(".top");
     slot.append(el("span", { class: "demo-badge" }, "демо-режим: ответы-заглушки"));
   }
+  const tg = document.getElementById("tg-link");
+  if (tg && h.telegram_url) {
+    tg.href = h.telegram_url;
+    tg.hidden = false;
+  }
 }).catch(() => {});
 
 renderChips();

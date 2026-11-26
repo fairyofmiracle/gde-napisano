@@ -8,7 +8,7 @@ import sys
 
 from bot.api import DocagentClient
 from bot.limiter import UserRateLimiter
-from bot.service import HELP, BotService
+from bot.service import MSG_DENIED, BotService
 from bot.settings import BotSettings
 from bot.transcribe import make_transcriber
 
@@ -37,7 +37,11 @@ def build_dispatcher(service: BotService):
     @router.message(CommandStart())
     @router.message(Command("help"))
     async def start(message: Message) -> None:
-        await message.answer(HELP + ("" if service.transcriber else " Голосовые сообщения отключены."))
+        user_id = message.from_user.id if message.from_user else 0
+        if not service.allowed(user_id):
+            await message.answer(MSG_DENIED)
+            return
+        await message.answer(service.welcome())
 
     @router.message(F.voice | F.audio)
     async def voice(message: Message, bot: Bot) -> None:
@@ -71,8 +75,10 @@ async def run(settings: BotSettings) -> None:
 
     api = DocagentClient(settings.docagent_url, settings.request_timeout)
     service = BotService(settings, api, make_transcriber(settings), UserRateLimiter(settings.rate_limit_per_minute))
-    if not settings.allowed_users:
-        log.warning("TELEGRAM_ALLOWED_USERS не задан: бот отвечает любому пользователю Telegram")
+    if not settings.allowed_users and not settings.telegram_open:
+        log.warning("TELEGRAM_ALLOWED_USERS пуст и TELEGRAM_OPEN=false: бот никому не отвечает")
+    elif not settings.allowed_users and settings.telegram_open:
+        log.warning("TELEGRAM_OPEN=true: бот отвечает любому пользователю Telegram")
     bot = Bot(settings.token)
     watcher = asyncio.create_task(_idle_watcher(service))
     try:

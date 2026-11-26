@@ -13,10 +13,15 @@ class BotSettings(BaseSettings):
 
     # Пустой токен = бот не запускается
     telegram_bot_token: SecretStr = Field(default=SecretStr(""), repr=False)
-    # Telegram id пользователей через запятую. Пусто = отвечать всем (для публичного стенда лучше задать).
+    # Telegram id пользователей через запятую. Без списка бот никому не отвечает (см. TELEGRAM_OPEN).
     telegram_allowed_users: str = ""
+    # true = пустой TELEGRAM_ALLOWED_USERS означает «всем» (только для открытого демо).
+    # false (по умолчанию) = без списка вопросов не принимает — защита от случайных людей.
+    telegram_open: bool = False
     # В группах бот молчит. Чтобы он отвечал в конкретной группе, перечислите её id через запятую (обычно с минусом).
     telegram_allowed_chats: str = ""
+    # Публичная ссылка на веб-чат для приветствия (/start). Пример: https://docs.example.ru
+    web_public_url: str = ""
 
     # Адрес приложения docagent (поиск и ответ делает оно, модели в бот не грузятся)
     docagent_url: str = "http://localhost:8000"

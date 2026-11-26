@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_title: str = "Где написано?"
+    # Username бота без @ (для ссылки в веб-интерфейсе). Пусто = ссылку не показываем.
+    telegram_bot_username: str = ""
 
     # Пути
     data_dir: Path = Path("./data/runtime")

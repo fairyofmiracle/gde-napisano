@@ -23,7 +23,8 @@ Download = Callable[[Path], Awaitable[None]]
 HELP = ("Я бот «Где написано?». Задайте вопрос по регламентам текстом или голосовым сообщением. Отвечу по "
         "загруженным документам и покажу, из какого пункта взят ответ.")
 MSG_BUSY = "Слишком много вопросов подряд, подождите минуту."
-MSG_DENIED = "Этот бот закрыт для вашего аккаунта."
+MSG_DENIED = ("Этот бот только для сотрудников из списка доступа. "
+              "Если вам нужен доступ — напишите администратору.")
 MSG_APP_DOWN = "Сервис поиска сейчас недоступен. Попробуйте позже."
 MSG_SHORT = "Вопрос слишком короткий. Напишите хотя бы пару слов."
 MSG_LONG = "Вопрос слишком длинный, максимум 2000 символов."
@@ -42,9 +43,21 @@ class BotService:
         self._voice_pending = 0
         self.last_used = time.monotonic()
 
+    def welcome(self) -> str:
+        text = HELP
+        if not self.transcriber:
+            text += " Голосовые сообщения отключены."
+        url = (self.settings.web_public_url or "").strip().rstrip("/")
+        if url:
+            text += f"\n\nТот же поиск в браузере: {url}"
+        return text
+
     def allowed(self, user_id: int) -> bool:
         allow = self.settings.allowed_users
-        return not allow or user_id in allow
+        if allow:
+            return user_id in allow
+        # Пустой список: либо открытый демо (TELEGRAM_OPEN=true), либо никому
+        return bool(self.settings.telegram_open)
 
     def chat_allowed(self, chat_type: str, chat_id: int, from_bot: bool = False) -> bool:
         """Личные сообщения от людей — да; группы и каналы — только из TELEGRAM_ALLOWED_CHATS; другие боты — нет."""

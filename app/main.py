@@ -298,11 +298,13 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     def health(request: Request):
         s: Services = svc(request)
         n = s.db.query("SELECT COUNT(*) AS n FROM clauses")[0]["n"]
+        tg = (settings.telegram_bot_username or "").strip().lstrip("@")
         return {
             "status": "ok", "version": __version__, "qdrant_ok": s.store.healthy(),
             "redis_ok": s.limiter.redis_ok(), "llm_provider": s.llm.provider, "llm_model": s.llm.model,
             "llm_ok": s.llm.healthy(), "clauses": n, "indexing": request.app.state.index_status["running"],
             "admin_enabled": bool(settings.admin_token), "demo_ui_only": settings.demo_ui_only,
+            "telegram_url": f"https://t.me/{tg}" if tg else None,
         }
 
     # --- публичное API -------------------------------------------------------------

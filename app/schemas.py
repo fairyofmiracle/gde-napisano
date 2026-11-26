@@ -156,6 +156,7 @@ class StatusOut(_Model):
     indexing: bool = Field(description="Идёт ли сейчас индексация")
     admin_enabled: bool = Field(description="Задан ли токен администратора")
     demo_ui_only: bool
+    telegram_url: str | None = Field(default=None, description="Ссылка на Telegram-бота, если задан TELEGRAM_BOT_USERNAME")
 
 
 # --- ящички, чат, отзывы -----------------------------------------------------------

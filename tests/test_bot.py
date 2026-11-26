@@ -37,7 +37,9 @@ NOT_FOUND = {"mode": "not_found", "text": "В загруженных докум�
 
 
 def make_settings(**kw) -> BotSettings:
-    base = dict(telegram_bot_token="123:test", transcriber="gigaam", voice_max_seconds=120, rate_limit_per_minute=0)
+    # telegram_open=True в тестах: без списка id бот ведёт себя как раньше (отвечает всем)
+    base = dict(telegram_bot_token="123:test", transcriber="gigaam", voice_max_seconds=120,
+                rate_limit_per_minute=0, telegram_open=True)
     base.update(kw)
     return BotSettings(_env_file=None, **base)
 
@@ -303,13 +305,29 @@ def test_app_down_message():
 
 def test_allowed_users_whitelist():
     seen = []
-    svc = BotService(make_settings(telegram_allowed_users="5"), make_api(seen=seen), FakeTranscriber())
+    svc = BotService(make_settings(telegram_allowed_users="5", telegram_open=False), make_api(seen=seen), FakeTranscriber())
     out, reply = collector()
     asyncio.run(svc.handle_text(6, "вопрос про отпуск", reply))
     asyncio.run(svc.handle_voice(6, 3, 1000, downloader(1), reply))
-    assert not seen and all("закрыт" in m for m in out)
+    assert not seen and all("списка доступа" in m or "закрыт" in m for m in out)
     asyncio.run(svc.handle_text(5, "вопрос про отпуск", reply))
     assert seen
+
+
+def test_closed_by_default_without_allowlist():
+    svc = BotService(make_settings(telegram_open=False, telegram_allowed_users=""), make_api(), None)
+    assert not svc.allowed(1)
+    out, reply = collector()
+    asyncio.run(svc.handle_text(1, "вопрос про отпуск", reply))
+    assert "списка доступа" in out[0]
+
+
+def test_welcome_includes_web_link():
+    svc = BotService(make_settings(web_public_url="https://docs.example.ru/"), make_api(), None)
+    text = svc.welcome()
+    assert text.startswith("Я бот «Где написано?»")
+    assert "https://docs.example.ru" in text
+    assert "Голосовые" in text  # transcriber=None → подсказка про голос
 
 
 # ---------- сервис: голос ----------
