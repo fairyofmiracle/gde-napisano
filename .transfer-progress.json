@@ -2,11 +2,11 @@
     "source":  "C:\\Users\\polyakova_av\\Desktop\\Хакатоны 2026\\ИИкузница (26.11-28.11)\\docagent",
     "dest":  "C:\\Users\\polyakova_av\\Desktop\\gde-napisano",
     "completed":  [
-                      "app/parsing"
+                      "app/parsing",
+                      "app/llm"
                   ],
-    "note":  "Do not overwrite root README.md or .gitignore unless explicitly asked. Stamp copied files with today 2026-11-26. Do not commit.",
+    "note":  "Interval 30m. Stamp with 2026-11-26 but stagger minutes/seconds per file. Do not overwrite root README.md or .gitignore. Do not commit.",
     "queue":  [
-                  "app/llm",
                   "app/index",
                   "app/core (config,errors,text,schemas,db,boxes,security,profanity,services)",
                   "app/pipeline (search,rewrite,memory,answer)",
@@ -24,5 +24,7 @@
                  "data/runtime",
                  "*.pyc",
                  ".venv"
-             ]
+             ],
+    "interval":  "30m",
+    "stamp_style":  "stagger minutes on 2026-11-26"
 }
