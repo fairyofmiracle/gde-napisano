@@ -3,17 +3,18 @@
     "dest":  "C:\\Users\\polyakova_av\\Desktop\\gde-napisano",
     "completed":  [
                       "app/parsing",
-                      "app/llm"
+                      "app/llm",
+                      "app/index",
+                      "app/core (config,errors,text,schemas,db,boxes,security,profanity,services)",
+                      "app/pipeline (search,rewrite,memory,answer)",
+                      "app/main + static",
+                      "bot",
+                      "docker+scripts+deploy",
+                      "data/sample_docs+boxes+tests"
                   ],
     "note":  "Interval 30m. Stamp with 2026-11-26 but stagger minutes/seconds per file. Do not overwrite root README.md or .gitignore. Do not commit.",
     "queue":  [
-                  "app/index",
-                  "app/core (config,errors,text,schemas,db,boxes,security,profanity,services)",
-                  "app/pipeline (search,rewrite,memory,answer)",
-                  "app/main + static",
-                  "bot",
-                  "docker+scripts+deploy",
-                  "data/sample_docs+boxes+tests"
+
               ],
     "stamp_date":  "2026-11-26",
     "skip":  [

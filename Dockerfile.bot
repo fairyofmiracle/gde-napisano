@@ -1,0 +1,21 @@
+# Образ Telegram-бота: aiogram, ffmpeg и распознавание речи (GigaAM на torch CPU). Поиск и модели e5 остаются в образе приложения.
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models GIGAAM_DIR=/models/gigaam HF_HUB_DISABLE_TELEMETRY=1
+
+WORKDIR /app
+COPY requirements-bot.txt .
+# git нужен только на время установки GigaAM из GitHub
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg git ca-certificates \
+    && pip install -r requirements-bot.txt \
+    && apt-get purge -y git && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY bot ./bot
+
+RUN useradd -m -u 1000 appuser && mkdir -p /models && chown -R appuser /models
+USER appuser
+
+CMD ["python", "-m", "bot"]

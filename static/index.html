@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Где написано?</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/logo-32.png">
+  <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
+  <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="chat-page">
+  <header class="top">
+    <div class="top-inner">
+      <div class="brand"><img class="brand-logo" src="/static/img/logo-64.png" width="28" height="28" alt="" aria-hidden="true"> Где <em>написано?</em></div>
+      <div class="top-badges"></div>
+      <a class="admin-link" href="/admin">Загрузка документов</a>
+    </div>
+  </header>
+  <div class="stage">
+    <section class="hero">
+      <h1 class="hero-title">Ответы из <em>ваших</em> документов</h1>
+      <p class="hero-lead">Спросите про отпуск, командировку, доступы, закупки или охрану труда. Ответ только по загруженным регламентам — с пунктом, откуда он взят.</p>
+    </section>
+    <div class="chip-row" role="group" aria-label="Направление">
+      <select id="box" title="Направление" class="sr-only">
+        <option value="">Все направления (определю сама)</option>
+      </select>
+      <div id="box-chips" class="chips"></div>
+    </div>
+    <main id="chat" class="chat" aria-live="polite"></main>
+  </div>
+  <div class="ask-bar">
+    <form id="ask" class="ask">
+      <textarea id="q" rows="1" maxlength="2000" placeholder="Например: за сколько дней подать заявление на отпуск?" required></textarea>
+      <button type="submit">Спросить</button>
+    </form>
+  </div>
+  <dialog id="clause">
+    <form method="dialog"><button class="close" type="submit" aria-label="Закрыть"><svg class="icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></form>
+    <div id="clause-body"></div>
+  </dialog>
+  <script src="/static/app.js"></script>
+</body>
+</html>

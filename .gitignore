@@ -22,6 +22,7 @@ env/
 
 # Данные и индексы
 data/runtime/
+data/docs/
 qdrant_storage/
 *.sqlite
 *.db

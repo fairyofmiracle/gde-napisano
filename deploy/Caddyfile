@@ -1,0 +1,54 @@
+# Обратный прокси перед приложением. Адрес сайта берётся из SITE_ADDRESS:
+#   :80                    — обычный http по IP (токен админки идёт открытым текстом, см. README)
+#   docs.example.ru        — домен: Caddy сам получит сертификат Let's Encrypt и включит HTTPS
+#   203-0-113-5.sslip.io   — домен «из IP» без покупки домена, тоже с настоящим сертификатом
+{
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 120s
+			write 600s
+			idle 120s
+		}
+	}
+}
+
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	# Размер тела запроса: файл документа (MAX_UPLOAD_MB=50) плюс запас на multipart
+	request_body {
+		max_size {$MAX_BODY:60MB}
+	}
+
+	header {
+		-Server
+		-X-Powered-By
+		# Заголовки безопасности ставит само приложение; здесь — то, что относится к HTTPS
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+	}
+
+	# Служебные адреса Qdrant и прочего наружу не проксируются: только приложение
+	reverse_proxy {$UPSTREAM:app:8000} {
+		# Caddy сам выставляет X-Forwarded-For с настоящим адресом клиента и не доверяет присланному извне
+		header_up -X-Real-IP
+		transport http {
+			dial_timeout 5s
+			# загрузка скана с OCR может идти минуты
+			response_header_timeout 600s
+		}
+	}
+
+	# В журнал не попадают заголовки запроса: в них токен администратора (X-Admin-Token) и куки
+	log {
+		output stdout
+		format filter {
+			wrap console
+			fields {
+				request>headers delete
+				resp_headers delete
+			}
+		}
+	}
+}
