@@ -18,7 +18,7 @@ from app.services import build_services  # noqa: E402
 
 def make_settings(tmp_path: Path, **kw) -> Settings:
     base = dict(
-        data_dir=tmp_path / "runtime", docs_dir=tmp_path / "docs", boxes_csv=ROOT / "data" / "boxes.csv",
+        data_dir=tmp_path / "runtime", docs_dir=tmp_path / "docs", boxes_csv=ROOT / "examples" / "boxes.csv",
         qdrant_url="", qdrant_path=":memory:", embed_provider="fake", reranker_provider="fake", llm_provider="fake",
         admin_token="", index_on_start=False, rate_limit_per_minute=0, confident_threshold=0.6,
         uncertain_threshold=0.15, box_fallback_threshold=0.5, feedback_sample_rate=0.02,

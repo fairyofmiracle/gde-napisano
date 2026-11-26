@@ -19,13 +19,18 @@ env/
 !.env.example
 *.pem
 *.key
+certs/*
+!certs/README.md
 
-# Данные и индексы
-data/runtime/
-data/docs/
+# Данные и индексы (всё локальное: документы, Qdrant, boxes.csv)
+data/
 qdrant_storage/
 *.sqlite
 *.db
+
+# Служебное переноса / бэкапы UI
+.transfer-progress.json
+static_backup_*/
 
 # Модели и кэш
 models/

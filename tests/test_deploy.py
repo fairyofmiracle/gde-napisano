@@ -13,6 +13,20 @@ ROOT = Path(__file__).resolve().parent.parent
 CADDY = shutil.which("caddy") or os.environ.get("CADDY_BIN", "")
 
 
+def _bash_works() -> bool:
+    """На Windows `where bash` часто находит заглушку WSL без реального /bin/bash."""
+    bash = shutil.which("bash")
+    if not bash:
+        return False
+    try:
+        return subprocess.run([bash, "-c", "exit 0"], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
+HAS_BASH = _bash_works()
+
+
 @pytest.fixture(scope="module")
 def compose():
     return yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
@@ -75,22 +89,23 @@ def test_caddyfile_validates(site):
 
 def test_ignore_files():
     gi = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    for item in (".env", "static_backup_*/", ".pytest_cache/", "data/runtime/", "backups/", "certs/*"):
+    for item in (".env", "static_backup_*/", ".pytest_cache/", "data/", "backups/", "certs/*"):
         assert item in gi
     assert "!.env.example" in gi
+    assert "!certs/README.md" in gi
     di = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-    for item in (".env", "static_backup_*", "tests", "backups", ".git"):
+    for item in (".env", "static_backup_*", "tests", "backups", ".git", "data"):
         assert item in di
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="нет bash")
+@pytest.mark.skipif(not HAS_BASH, reason="нет рабочего bash")
 @pytest.mark.parametrize("script", ["backup.sh", "restore.sh", "prefetch_models.sh", "get_russian_ca.sh"])
 def test_shell_scripts_parse(script):
     path = ROOT / "scripts" / script
     assert subprocess.run(["bash", "-n", str(path)]).returncode == 0
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="нет bash")
+@pytest.mark.skipif(not HAS_BASH, reason="нет рабочего bash")
 def test_native_backup_and_restore_roundtrip(tmp_path):
     """Копия и восстановление без Docker: база, документы, повторная копия вытесняет старые."""
     import sqlite3

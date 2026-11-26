@@ -88,7 +88,7 @@ def main() -> None:
     make_docs(tmp / "docs")
     settings = Settings(data_dir=tmp / "runtime", docs_dir=tmp / "docs", qdrant_url="", qdrant_path=":memory:",
                         llm_provider=args.llm, index_on_start=False, rate_limit_per_minute=0,
-                        boxes_csv=ROOT / "data" / "boxes.csv")
+                        boxes_csv=ROOT / "examples" / "boxes.csv")
     t0 = time.perf_counter()
     svc = build_services(settings, rng=random.Random(0))
     stats = svc.indexer.sync()

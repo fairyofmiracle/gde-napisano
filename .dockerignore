@@ -8,9 +8,9 @@ __pycache__
 .ruff_cache
 .venv
 venv
-data/runtime
-data/sample_docs
+data
 eval
+examples
 tests
 backups
 certs

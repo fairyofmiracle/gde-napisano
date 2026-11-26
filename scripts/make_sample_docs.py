@@ -1,6 +1,7 @@
-"""Создать условные регламенты во всех поддерживаемых форматах.
+"""Создать условные регламенты во всех поддерживаемых форматах (для тестов/eval).
 
-    python scripts/make_sample_docs.py data/sample_docs
+    python scripts/make_sample_docs.py %TEMP%\\docagent_samples
+    # папка data/ в git не попадает — демо-файлы только локально или во временный каталог
 """
 from __future__ import annotations
 
@@ -253,4 +254,4 @@ def main(out: Path) -> None:
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1] if len(sys.argv) > 1 else "data/sample_docs"))
+    main(Path(sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="docagent_samples_")))

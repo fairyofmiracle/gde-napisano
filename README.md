@@ -20,8 +20,9 @@
 app/           # FastAPI-приложение, парсинг, индекс, LLM
 bot/           # Telegram-бот (отдельный процесс / образ)
 tests/         # pytest
+examples/      # примеры конфигов (boxes.csv) — рабочие копии кладите в data/
 certs/         # корневой сертификат НУЦ для GigaChat (см. certs/README.md)
-data/runtime/  # документы, Qdrant, рантайм (в git не попадает)
+data/          # документы, Qdrant, рантайм — только локально, в git не попадает
 ```
 
 ## Быстрый старт (локально)
@@ -66,6 +67,7 @@ copy .env.example .env
    Впишите в `ADMIN_TOKEN` (не короче `ADMIN_TOKEN_MIN_LENGTH`).
 
 2. Проверьте пути: `DATA_DIR`, `DOCS_DIR`, `QDRANT_PATH` (локально Qdrant работает из папки, сервер не обязателен).
+   Документы кладите в `DOCS_DIR` (по умолчанию `data/runtime/docs`) или задайте свой путь. Пример ящиков: `copy examples\boxes.csv data\boxes.csv`.
 
 3. При GigaChat: `GIGACHAT_CREDENTIALS` и сертификат — см. [certs/README.md](certs/README.md).
 
