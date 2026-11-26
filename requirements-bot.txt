@@ -1,0 +1,17 @@
+# Зависимости Telegram-бота (отдельный образ, Dockerfile.bot). Приложению они не нужны.
+# Версии зафиксированы 25.11.2026. torch и torchaudio ставятся в CPU-сборке и должны быть одной версии.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.11.0
+torchaudio==2.11.0
+
+aiogram==3.34.0
+httpx==0.28.1
+pydantic==2.14.4
+pydantic-settings==2.16.3
+numpy==2.5.5
+
+# GigaAM (Сбер, MIT). На PyPI лежит старая версия 0.1.0 без моделей v3, поэтому ставим из GitHub по коммиту.
+gigaam @ git+https://github.com/salute-developers/GigaAM.git@7447938d791c4f3e643386ee22c33777004293a5
+
+# Запасной движок TRANSCRIBER=whisper (faster-whisper, CTranslate2, MIT). Раскомментируйте, если нужен.
+# faster-whisper==1.2.1
