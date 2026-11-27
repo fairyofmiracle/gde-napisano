@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import logging
 import re
 import shutil
@@ -14,10 +15,11 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request,
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import __version__
+from app import __version__, progress
 from app.boxes import GENERAL_BOX
 from app.config import Settings, get_settings
 from app.errors import (
@@ -358,6 +360,59 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             lambda: s.assistant.ask(body.question, session_id=body.session_id or "", division=body.division,
                                     boxes=body.boxes, user_email=body.user_email or "",
                                     user_name=body.user_name or ""))
+
+    @app.post("/api/chat/stream", tags=["Чат и поиск"], summary="Задать вопрос: ответ по шагам",
+              description="То же, что `/api/chat`, но ответ приходит потоком NDJSON (одна JSON-строка на событие): "
+                          "`status` — текущий шаг («Ищу в документах», «Пишу ответ», «Сверяю пункты»), "
+                          "`evidence` — найденные пункты с цитатами, как только они есть, `draft` — черновик текста "
+                          "по мере генерации, `ping` — поддержка соединения, `final` — итоговый ответ в формате "
+                          "`/api/chat` (после проверки цитат и чисел он заменяет черновик), `error` — сбой.",
+              responses=CHAT_ERRORS)
+    async def chat_stream(body: ChatIn, request: Request):
+        s: Services = svc(request)
+        client = client_ip(request)
+        trusted = client in settings.trusted_client_ip_set
+        limit = settings.rate_limit_trusted_per_minute if trusted else None
+        if not s.limiter.allow(client if not trusted else f"trusted:{client}", limit):
+            raise HTTPException(429, "Слишком много вопросов подряд, подождите минуту",
+                                headers={"Retry-After": "60"})
+        events: queue.Queue = queue.Queue()
+
+        def work() -> None:
+            try:
+                with progress.listening(events.put):
+                    out = s.assistant.ask(body.question, session_id=body.session_id or "", division=body.division,
+                                          boxes=body.boxes, user_email=body.user_email or "",
+                                          user_name=body.user_name or "")
+                events.put({"type": "final", "answer": jsonable_encoder(ChatOut.model_validate(out))})
+            except Exception:
+                log.exception("потоковый ответ не собран")
+                events.put({"type": "error", "detail": "Не получилось собрать ответ, попробуйте ещё раз"})
+            finally:
+                events.put(None)
+
+        threading.Thread(target=work, name="chat-stream", daemon=True).start()
+
+        async def gen():
+            last = ("", "Ищу в документах")
+            yield progress.ndjson({"type": "status", "text": last[1], "step": "search"})
+            while True:
+                try:
+                    ev = await run_in_threadpool(events.get, True, 10.0)
+                except queue.Empty:
+                    yield progress.ndjson({"type": "ping"})
+                    continue
+                if ev is None:
+                    break
+                if ev.get("type") == "status":
+                    key = (ev.get("scope") or "", ev.get("text") or "")
+                    if key == last:
+                        continue  # тот же шаг второй раз не показываем
+                    last = key
+                yield progress.ndjson(ev)
+
+        return StreamingResponse(gen(), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 
     @app.post("/api/escalate", tags=["Чат и поиск"], summary="Передать вопрос в службу качества",
               description="Сотрудник сам просит передать вопрос эксперту (например, после вариантов по "

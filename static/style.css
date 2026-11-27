@@ -744,3 +744,13 @@ tbody tr:hover td { background: rgba(210, 220, 229, .04); }
 
 /* подпункты нумерованных списков внутри пункта */
 .doc-clause.doc-sub { margin-left: 1.75em; }
+
+/* Живой ответ по шагам */
+.msg.live .live-status { color: var(--muted); font-size: .92em; margin-bottom: .4rem; }
+.msg.live .live-status::after { content: ""; display: inline-block; width: 1.2em; text-align: left; animation: live-dots 1.2s steps(4, end) infinite; }
+@keyframes live-dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+.msg.live .live-group + .live-group { margin-top: .6rem; }
+.msg.live .live-scope { font-weight: 600; margin-bottom: .2rem; }
+.msg.live .live-item { opacity: .92; }
+.msg.live .live-draft:not(:empty) { margin-top: .5rem; color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .msg.live .live-status::after { animation: none; content: "..."; } }

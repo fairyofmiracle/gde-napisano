@@ -9,6 +9,7 @@ import re
 import time
 import uuid
 
+from app import progress
 from app.llm import LLMError
 from app.llm.prompts import (ANSWER_SYSTEM, CONFLICT_SYSTEM, REWRITE_SYSTEM, answer_user, conflict_user,
                              looks_like_injection, rewrite_user)
@@ -20,6 +21,10 @@ from app.text import normalize, stem
 log = logging.getLogger(__name__)
 
 CONFIDENT, UNCERTAIN, NOT_FOUND = "confident", "uncertain", "not_found"
+
+# Слова, по которым видно, что вопрос опирается на предыдущий разговор
+_CONTEXT_WORDS = {"а", "он", "она", "оно", "они", "его", "ее", "её", "их", "это", "этот", "эта", "эти", "этого", "этом",
+                  "там", "тогда", "такой", "такая", "такие", "тот", "та", "те", "того", "том", "тоже", "также"}
 
 
 def _canon(text: str) -> str:
@@ -204,6 +209,7 @@ class AnswerService:
         mode, top, ambiguous_with = self._assess(cands)
         trace.add("assess", "Оценка уверенности", "ok" if mode == CONFIDENT else "warn",
                   self._assess_detail(mode, top))
+        self._emit_evidence(cands, mode, question)
 
         # Повторный поиск по переформулированному вопросу, если уверенности не хватило
         tried = {normalize(question)}
@@ -213,7 +219,8 @@ class AnswerService:
                and self._has_documents()):
             iteration += 1
             t = time.perf_counter()
-            queries, how, toks = self._reformulate(question, tried)
+            progress.status("Уточняю формулировку и ищу ещё раз", "rewrite")
+            queries, how, toks = self._reformulate(question, tried, top)
             rewrite_tokens[0] += toks[0]
             rewrite_tokens[1] += toks[1]
             if not queries:
@@ -227,6 +234,8 @@ class AnswerService:
                 cands = self._merge(cands, extra.candidates)
             mode, top, ambiguous_with = self._assess(cands)
             better = top > before + 1e-6
+            if better:
+                self._emit_evidence(cands, mode, question)
             shown = "; ".join(f"«{q}»" for q in queries)
             trace.add("rewrite", f"Переформулировка и повторный поиск ({iteration})", "ok" if better else "warn",
                       f"{'Модель' if how == 'llm' else 'Правила'}: {shown}. Лучшая оценка "
@@ -254,10 +263,16 @@ class AnswerService:
                           + " есть похожие на команды фразы: модели сказано считать их данными")
             t = time.perf_counter()
             data, llm_failed = None, False
+            progress.status("Пишу ответ", "generate")
             try:
-                r = self.llm.chat(ANSWER_SYSTEM, answer_user(question, [
-                    {"ref": c.ref, "section": c.section, "text": clip_text(c.text, s.answer_ctx_chars)} for c in ctx]),
-                    json_mode=True)
+                prompt = answer_user(question, [
+                    {"ref": c.ref, "section": c.section, "text": clip_text(c.text, s.answer_ctx_chars)} for c in ctx])
+                if progress.active():
+                    draft = progress.AnswerDraft()
+                    r = self.llm.chat_stream(ANSWER_SYSTEM, prompt, json_mode=True, on_delta=draft.feed)
+                    draft.flush()
+                else:
+                    r = self.llm.chat(ANSWER_SYSTEM, prompt, json_mode=True)
                 prompt_tokens += r.prompt_tokens
                 completion_tokens += r.completion_tokens
                 provider = r.provider
@@ -278,6 +293,7 @@ class AnswerService:
                                  "дословно пункт, который лучше всего подходит к вопросу.")
                 trace.add("verify_quote", "Проверка цитаты", "ok", "Цитата взята из пункта дословно")
             else:
+                progress.status("Проверяю цитаты и числа", "verify")
                 citations = self._verified_citations(data, ctx) if data else []
                 if data and data.get("answerable") and not citations and not s.strict_quotes:
                     citations = self._fallback_citation(data, ctx)
@@ -420,6 +436,7 @@ class AnswerService:
                 clauses.append((c, txt))
         if len(clauses) < 2:
             return 0, 0
+        progress.status("Сверяю пункты между собой", "conflict")
         try:
             r = self.llm.chat(CONFLICT_SYSTEM, conflict_user(question, [
                 {"ref": c.ref, "text": txt} for c, txt in clauses]), json_mode=True)
@@ -465,6 +482,20 @@ class AnswerService:
         trace.add("conflict", "Проверка противоречий", "warn",
                   f"Найдено расхождение внутри документа: п. {c1.shown_no} и п. {c2.shown_no}", t)
         return used
+
+    def _emit_evidence(self, cands: list[Candidate], mode: str, question: str = "") -> None:
+        """Найденные пункты сразу уходят в потоковый ответ, ещё до текста модели."""
+        if not progress.active():
+            return
+        s = self.settings
+        items = [{"ref": c.ref, "doc_id": c.doc_id, "doc_title": c.doc_title, "clause_no": c.clause_no,
+                  "point_id": c.point_id, "page": c.page, "score": round(c.score, 3),
+                  "quote": _trim(self._relevant_sentences(question, c.text) or c.text, 260)}
+                 for c in cands[:max(1, s.answer_contexts)] if c.score >= s.uncertain_threshold]
+        progress.emit("evidence", items=items, mode=mode)
+        if items:
+            progress.status("Сверяю найденные пункты" if mode == CONFIDENT else "Пункты найдены, но уверенности мало",
+                            "assess")
 
     # --- шаги агента ---------------------------------------------------------------------
     def _trace_search(self, trace: "Trace", res, t: float) -> None:
@@ -515,12 +546,27 @@ class AnswerService:
         except Exception:
             return True
 
-    def _reformulate(self, question: str, tried: set[str]) -> tuple[list[str], str, tuple[int, int]]:
-        """Новые формулировки для поиска: сначала модель (если разрешено), при сбое — правила."""
+    def _needs_llm_rewrite(self, question: str, top: float | None) -> bool:
+        """Переформулировка моделью стоит отдельного вызова. Она нужна, когда поиск почти попал
+        (оценка в «серой зоне»), вопрос короткий или опирается на контекст разговора (местоимения).
+        Если подходящего пункта не видно совсем, хватает правил: модель тут ответа не находит."""
+        s = self.settings
+        floor = float(getattr(s, "agent_rewrite_llm_min_score", 0.0) or 0.0)
+        if floor <= 0 or top is None or top >= floor:
+            return True
+        words = re.findall(r"[а-яёa-z0-9]+", normalize(question))
+        if len(words) <= 4:
+            return True
+        # «А он…», «Это касается…»: вопрос начинается со ссылки на прошлую реплику
+        return bool(_CONTEXT_WORDS & set(words[:2]))
+
+    def _reformulate(self, question: str, tried: set[str],
+                     top: float | None = None) -> tuple[list[str], str, tuple[int, int]]:
+        """Новые формулировки для поиска: сначала модель (если разрешено и нужно), при сбое — правила."""
         s = self.settings
         queries: list[str] = []
         how, toks = "rules", (0, 0)
-        if s.agent_rewrite_use_llm:
+        if s.agent_rewrite_use_llm and self._needs_llm_rewrite(question, top):
             try:
                 r = self.llm.chat(REWRITE_SYSTEM, rewrite_user(question), json_mode=True)
                 toks = (r.prompt_tokens, r.completion_tokens)

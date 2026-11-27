@@ -32,6 +32,60 @@ MSG_LONG = "Вопрос слишком длинный, максимум 2000 с
 MSG_VOICE_BUSY = "Сейчас распознаётся много голосовых. Подождите минуту или напишите вопрос текстом."
 
 
+class _LiveMessage:
+    """Одно сообщение о ходе ответа: «Нашла пункты: …, пишу ответ», потом оно правится итоговым ответом.
+    Правка одна (итог), промежуточные статусы не шлются, чтобы не упираться в лимиты Telegram;
+    пока ответ готовится, бот показывает «печатает…»."""
+
+    def __init__(self, reply) -> None:
+        self.reply = reply
+        self.handle = None
+        self.refs: list[str] = []
+        self._typing = asyncio.create_task(self._keep_typing()) if getattr(reply, "typing", None) else None
+
+    async def _keep_typing(self) -> None:
+        try:
+            while True:
+                try:
+                    await self.reply.typing()
+                except Exception:
+                    pass
+                await asyncio.sleep(4.5)
+        except asyncio.CancelledError:
+            pass
+
+    def stop_typing(self) -> None:
+        if self._typing:
+            self._typing.cancel()
+            self._typing = None
+
+    async def on_event(self, ev: dict) -> None:
+        if ev.get("type") != "evidence" or self.handle is not None:
+            return
+        by_doc: dict[str, list[str]] = {}
+        for it in (ev.get("items") or [])[:3]:
+            title = it.get("doc_title") or it.get("ref") or ""
+            no = it.get("clause_no")
+            by_doc.setdefault(title, [])
+            if no:
+                by_doc[title].append(str(no))
+        refs = [(f"п. {', '.join(nos)} ({title})" if nos else title) for title, nos in by_doc.items() if title or nos]
+        if not refs:
+            return
+        self.refs = refs
+        self.handle = await self.reply.send("Нашла пункты: " + "; ".join(refs) + ". Пишу ответ…")
+
+    async def finish(self, text: str, buttons=None) -> bool:
+        """Правит сообщение итогом. False — сообщения нет или правка не прошла: тогда итог шлётся заново."""
+        if self.handle is None or not getattr(self.reply, "edit", None):
+            return False
+        try:
+            return bool(await self.reply.edit(self.handle, text, buttons))
+        except Exception:
+            log.warning("не удалось заменить сообщение о ходе ответа", exc_info=True)
+            return False
+
+
 class BotService:
     def __init__(self, settings: BotSettings, api: DocagentClient, transcriber: Transcriber | None,
                  limiter: UserRateLimiter | None = None) -> None:
@@ -138,13 +192,23 @@ class BotService:
             return await reply(MSG_SHORT)
         if len(question) > 2000:
             return await reply(MSG_LONG)
+        session = f"tg-{user_id}" if user_id else None
+        live = _LiveMessage(reply) if getattr(reply, "send", None) and hasattr(self.api, "ask_stream") else None
         try:
-            data = await self.api.ask(question, session_id=f"tg-{user_id}" if user_id else None, division=division)
+            if live:
+                data = await self.api.ask_stream(question, live.on_event, session_id=session, division=division)
+            else:
+                data = await self.api.ask(question, session_id=session, division=division)
         except RateLimited as e:
             return await reply(f"Слишком много вопросов подряд, подождите {e.retry_after} с.")
         except ApiError as e:
             log.error("docagent: %s", e)
+            if live and await live.finish(MSG_APP_DOWN):
+                return None
             return await reply(MSG_APP_DOWN)
+        finally:
+            if live:
+                live.stop_typing()
         parts = split_message(format_answer(data, self.settings.web_public_url))
         if data.get("mode") == "clarify" and data.get("clarify"):
             self._pending[user_id] = data["clarify"].get("pending_question") or question
@@ -155,6 +219,15 @@ class BotService:
         buttons = None
         if can_simplify(data):
             buttons = [("Не понял", f"simp:{data['answer_id']}")]
+        if live and parts:
+            # итог заменяет сообщение «Нашла пункты…»: первая часть — правкой, остальные — новыми сообщениями
+            if await live.finish(parts[0], buttons if len(parts) == 1 else None):
+                parts = parts[1:]
+                for part in parts[:-1]:
+                    await reply(part)
+                if parts:
+                    await reply(parts[-1], buttons)
+                return None
         for part in parts[:-1]:
             await reply(part)
         if parts:

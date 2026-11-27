@@ -144,3 +144,46 @@ class GigaChatLLM(LLM):
             completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
             provider=self.provider, model=self.model,
         ))
+
+    def chat_stream(self, system: str, user: str, json_mode: bool = False, on_delta=None) -> LLMResult:
+        """Потоковый ответ. Повтор возможен только до первого куска текста, дальше ошибка уходит наверх."""
+        from gigachat.models import Chat, Messages, MessagesRole
+
+        payload = Chat(
+            messages=[Messages(role=MessagesRole.SYSTEM, content=system), Messages(role=MessagesRole.USER, content=user)],
+            temperature=max(self.temperature, 0.01),
+            max_tokens=self.max_tokens,
+        )
+        attempt = 0
+        while True:
+            parts: list[str] = []
+            usage = None
+            try:
+                with self._slots:
+                    for chunk in self.client.stream(payload):
+                        if getattr(chunk, "usage", None) is not None:
+                            usage = chunk.usage
+                        for ch in chunk.choices or []:
+                            piece = getattr(ch.delta, "content", None) or ""
+                            if piece:
+                                parts.append(piece)
+                                if on_delta is not None:
+                                    on_delta(piece)
+                break
+            except Exception as e:
+                if not parts and attempt < self.retries and _retryable(e):
+                    attempt += 1
+                    delay = self.backoff * (2 ** (attempt - 1))
+                    log.warning("GigaChat: %s, повтор %d из %d через %.1f с", _describe(e), attempt, self.retries,
+                                delay)
+                    if "Transport" in type(e).__name__ or "Timeout" in type(e).__name__:
+                        self._reset_client()
+                    self._sleep(delay)
+                    continue
+                raise LLMError(f"GigaChat: {_describe(e)}") from e
+        return self.log_usage(LLMResult(
+            text="".join(parts).strip(),
+            prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+            completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+            provider=self.provider, model=self.model,
+        ))

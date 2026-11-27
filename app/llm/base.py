@@ -33,6 +33,14 @@ class LLM:
     def chat(self, system: str, user: str, json_mode: bool = False) -> LLMResult:  # pragma: no cover
         raise NotImplementedError
 
+    def chat_stream(self, system: str, user: str, json_mode: bool = False, on_delta=None) -> LLMResult:
+        """Тот же ответ, что chat, но куски текста по мере генерации отдаются в on_delta.
+        Провайдеры без потока отдают весь текст одним куском."""
+        res = self.chat(system, user, json_mode=json_mode)
+        if on_delta is not None and res.text:
+            on_delta(res.text)
+        return res
+
     def healthy(self) -> bool:
         return True
 
@@ -66,11 +74,17 @@ class GuardedLLM(LLM):
         return self._clock() < self._open_until
 
     def chat(self, system: str, user: str, json_mode: bool = False) -> LLMResult:
+        return self._guarded(lambda: self.inner.chat(system, user, json_mode=json_mode))
+
+    def chat_stream(self, system: str, user: str, json_mode: bool = False, on_delta=None) -> LLMResult:
+        return self._guarded(lambda: self.inner.chat_stream(system, user, json_mode=json_mode, on_delta=on_delta))
+
+    def _guarded(self, call) -> LLMResult:
         with self._lock:
             if self._clock() < self._open_until:
                 raise LLMError("модель временно недоступна (предохранитель открыт)")
         try:
-            res = self.inner.chat(system, user, json_mode=json_mode)
+            res = call()
         except LLMConfigError:
             raise
         except LLMError:

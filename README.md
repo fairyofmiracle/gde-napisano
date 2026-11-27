@@ -138,6 +138,16 @@ python scripts\eval_softline.py --docs data\docs --questions eval\test_questions
 
 Подробные шаги со временем лежат внутри блока («Все шаги»). В API то же самое приходит в поле `investigation`, в Telegram по строке на часть в конце ответа.
 
+## Ответ по шагам
+
+На сайте ответ появляется по частям: сначала текущий шаг («Ищу в документах», «Сверяю найденные пункты», «Пишу ответ»), затем найденные пункты с цитатами, потом текст ответа по мере того, как модель его пишет. Проверка цитат, чисел и противоречий идёт после генерации, и итоговый ответ заменяет черновик: если проверка показала расхождение или число не из документа, вместо черновика будет дословный пункт или оба противоречащих пункта.
+
+- `POST /api/chat/stream` принимает то же, что `/api/chat`, и отдаёт поток NDJSON: `status`, `evidence`, `draft`, `ping` раз в 10 секунд, в конце `final` с ответом в формате `/api/chat`. Обычный `/api/chat` работает как раньше.
+- Telegram-бот сразу присылает «Нашла пункты: …. Пишу ответ…», показывает «печатает…» и одной правкой заменяет это сообщение итоговым ответом, без лишних сообщений.
+- Поток идёт напрямую из uvicorn без буферизации (`X-Accel-Buffering: no` на случай прокси). Ожидание ответа не ограничено по времени на сайте, у бота таймаут чтения 180 секунд, а `ping` не даёт соединению простаивать.
+
+Переформулировка вопроса отдельным вызовом модели делается только в «серой зоне»: лучшая оценка не ниже `AGENT_REWRITE_LLM_MIN_SCORE` (по умолчанию 0,25), вопрос короткий (до 4 слов) или ссылается на прошлый разговор. Если подходящих пунктов не видно совсем, хватает правил переформулировки. `AGENT_REWRITE_LLM_MIN_SCORE=0` возвращает прежнее поведение.
+
 ## Выгрузка в Confluence
 
 На `/wiki` кнопка «Выгрузить для Confluence» отдаёт zip с регламентами по пунктам (с якорями) и разъяснениями службы качества со ссылками друг на друга, в формате хранения Confluence и в HTML. Загрузка в пространство: `scripts/confluence_upload.py`, инструкция в `docs/confluence.md`.
@@ -207,7 +217,7 @@ IMAP_HOST=... IMAP_USER=... IMAP_PASSWORD=...
 |------|------------|
 | LLM | `LLM_PROVIDER`, `OLLAMA_*`, `GIGACHAT_*`, `LLM_RETRIES`, `LLM_MAX_CONCURRENCY` |
 | Поиск | `EMBED_MODEL`, `RERANKER_MODEL`, `CONFIDENT_THRESHOLD`, `UNCERTAIN_THRESHOLD`, `AMBIGUITY_MARGIN` |
-| Агент | `AGENT_REWRITE`, `AGENT_MAX_REWRITES`, `CHECK_NUMBERS` |
+| Агент | `AGENT_REWRITE`, `AGENT_MAX_REWRITES`, `AGENT_REWRITE_LLM_MIN_SCORE`, `CHECK_NUMBERS` |
 | Безопасность | `ADMIN_TOKEN`, `ADMIN_ALLOWED_IPS`, `ADMIN_*_FAILURES/LOCKOUT`, `RATE_LIMIT_*`, `CORS_ORIGINS` |
 | Загрузка | `MAX_UPLOAD_MB`, `ALLOWED_UPLOAD_EXTENSIONS` |
 | Подразделения и глоссарий | `BOXES_CSV`, `GLOSSARY_TSV`, `CLARIFY_MAX` |

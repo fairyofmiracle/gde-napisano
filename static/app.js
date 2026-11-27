@@ -567,6 +567,85 @@ async function openClause(pointId) {
   } catch (err) { body.textContent = err.message; }
 }
 
+// Живой ответ: сразу показываем шаг, найденные пункты и черновик текста, потом заменяем итоговым ответом
+function liveAnswer(wait) {
+  const status = el("div", { class: "live-status" }, "Ищу в документах");
+  const evidence = el("div", { class: "live-evidence" });
+  const draft = el("div", { class: "answer-text live-draft" });
+  const groups = {};
+  const drafts = {};
+  wait.classList.remove("wait");
+  wait.classList.add("live");
+  fill(wait, status, evidence, draft);
+  function group(scope) {
+    const key = scope || "";
+    if (!groups[key]) {
+      const g = el("div", { class: "live-group" });
+      if (key) g.append(el("div", { class: "live-scope" }, key));
+      const list = el("div", { class: "live-items" });
+      const text = el("div", { class: "answer-text live-draft" });
+      g.append(list, text);
+      evidence.append(g);
+      groups[key] = { list, text };
+    }
+    return groups[key];
+  }
+  return {
+    status(text) { status.textContent = text; },
+    evidence(ev) {
+      const g = group(ev.scope);
+      fill(g.list, el("div", { class: "sources-title" }, ev.items && ev.items.length ? "Нашла пункты:" : "Подходящих пунктов пока нет"),
+        (ev.items || []).map(c => el("div", { class: "source-item live-item" },
+          el("div", {}, sourceLine(c), c.quote ? el("blockquote", { class: "quote" }, `«${c.quote}»`) : null))));
+      scrollDown();
+    },
+    draft(ev) {
+      const target = ev.scope ? group(ev.scope).text : draft;
+      drafts[ev.scope || ""] = ev.text;
+      target.textContent = ev.text;
+      scrollDown();
+    },
+  };
+}
+
+async function askStream(body, wait) {
+  const r = await fetch("/api/chat/stream", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (!r.ok || !r.body || !r.body.getReader) {
+    const data = await r.json().catch(() => ({}));
+    const err = new Error(data.detail || `Ошибка ${r.status}`);
+    err.fallback = r.status === 404 || r.status === 405 || !r.body;
+    if (r.status === 429) err.fallback = false;
+    throw err;
+  }
+  const live = liveAnswer(wait);
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let final = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch (_) { continue; }
+      if (ev.type === "status") live.status(ev.scope ? `${ev.scope}: ${ev.text}` : ev.text);
+      else if (ev.type === "evidence") live.evidence(ev);
+      else if (ev.type === "draft") live.draft(ev);
+      else if (ev.type === "final") final = ev.answer;
+      else if (ev.type === "error") throw new Error(ev.detail || "Не получилось собрать ответ");
+    }
+  }
+  if (!final) throw new Error("Ответ прервался, попробуйте ещё раз");
+  return final;
+}
+
 async function ask(question, division = null, divisionLabel = null) {
   chat.append(el("div", { class: "msg user" }, divisionLabel ? `${divisionLabel}` : question));
   const wait = el("div", { class: "msg bot wait" }, "Ищу в документах…");
@@ -578,11 +657,18 @@ async function ask(question, division = null, divisionLabel = null) {
     const u = currentUser();
     const body = { question, session_id: sessionId, division: div };
     if (u.email) { body.user_email = u.email; body.user_name = u.name || ""; }
-    const ans = await api("/api/chat", body);
+    let ans;
+    try {
+      ans = await askStream(body, wait);
+    } catch (err) {
+      if (!err.fallback) throw err;
+      ans = await api("/api/chat", body);
+    }
     wait.remove();
     renderAnswer(ans);
   } catch (err) {
-    wait.textContent = "Не получилось: " + err.message;
+    fill(wait, "Не получилось: " + err.message);
+    wait.className = "msg bot wait";
   } finally {
     form.querySelector("button").disabled = false;
     q.focus();

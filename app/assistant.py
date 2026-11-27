@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -13,7 +14,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from app import investigation
+from app import investigation, progress
 from app.escalation import EscalationError
 from app.guard import missing_documents, off_topic
 from app.simplify import can_simplify, payload_from_answer
@@ -125,6 +126,7 @@ class Assistant:
             return self._finish(out, sess, outcome="offtopic")
 
         search_q, terms = self.glossary.expand(q)
+        progress.status("Ищу в документах", "search")
 
         hit = self.faq.lookup(q, division=cur_div if cur_div != UNKNOWN else "")
         if hit:
@@ -203,9 +205,17 @@ class Assistant:
         return self._finish(out, sess, outcome="clarify")
 
     def _by_division(self, q: str, search_q: str, divs: list[str], t0: float) -> dict:
-        def one(d):
-            return d, self.answers.ask(q, [d], strict=True, search_query=search_q, record=False)
+        def inner(d):
+            with progress.scoped(self.boxes.name(d)):
+                return d, self.answers.ask(q, [d], strict=True, search_query=search_q, record=False)
 
+        # у каждого потока своя копия контекста: события хода ответа доходят до потоковой выдачи
+        ctxs = {d: contextvars.copy_context() for d in divs}
+
+        def one(d):
+            return ctxs[d].run(inner, d)
+
+        progress.emit("divisions", names=[self.boxes.name(d) for d in divs])
         with ThreadPoolExecutor(max_workers=max(1, min(len(divs), self.settings.llm_max_concurrency))) as ex:
             results = list(ex.map(one, divs))
         out = self._base(q, "by_division", BY_DIVISION_TEXT, t0)

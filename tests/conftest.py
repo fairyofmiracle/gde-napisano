@@ -22,6 +22,8 @@ def make_settings(tmp_path: Path, **kw) -> Settings:
         qdrant_url="", qdrant_path=":memory:", embed_provider="fake", reranker_provider="fake", llm_provider="fake",
         admin_token="", index_on_start=False, rate_limit_per_minute=0, confident_threshold=0.6,
         uncertain_threshold=0.15, box_fallback_threshold=0.5, feedback_sample_rate=0.02,
+        # механику переформулировки проверяем на любой неуверенности; порог «серой зоны» — в test_stream.py
+        agent_rewrite_llm_min_score=0.0,
     )
     base.update(kw)
     return Settings(_env_file=None, **base)

@@ -36,6 +36,28 @@ def build_dispatcher(service: BotService):
                 markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=d)]
                                                                for t, d in buttons])
             await message.answer(text, reply_markup=markup)
+
+        def _markup(buttons):
+            if not buttons:
+                return None
+            return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=d)]
+                                                         for t, d in buttons])
+
+        async def send(text: str):
+            return await message.answer(text)
+
+        async def edit(sent, text: str, buttons=None) -> bool:
+            try:
+                await sent.edit_text(text, reply_markup=_markup(buttons))
+                return True
+            except Exception as e:  # «message is not modified», лимит правок и т. п.: итог отправится новым сообщением
+                log.info("правка сообщения не удалась: %s", type(e).__name__)
+                return False
+
+        async def typing() -> None:
+            await message.bot.send_chat_action(message.chat.id, "typing")
+
+        reply.send, reply.edit, reply.typing = send, edit, typing
         return reply
 
     @router.callback_query(F.data.startswith("div:"))
