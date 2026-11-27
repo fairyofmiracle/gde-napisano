@@ -6,7 +6,7 @@ import json
 import re
 
 from .base import LLM, LLMResult
-from .prompts import REWRITE_SYSTEM
+from .prompts import REWRITE_SYSTEM, SIMPLIFY_SYSTEM
 
 
 class FakeLLM(LLM):
@@ -24,6 +24,16 @@ class FakeLLM(LLM):
 
             q = user.split("\n", 1)[-1].strip()
             text = json.dumps({"query": rule_rewrite(q), "subquestions": []}, ensure_ascii=False)
+            return self.log_usage(LLMResult(text, len(system + user) // 4, len(text) // 4, self.provider, self.model))
+        if system == SIMPLIFY_SYSTEM:
+            m = re.search(r"Исходный ответ[^\n]*:\n(.+?)(?:\nЦитаты|\nГлоссарий|$)", user, re.S)
+            src = (m.group(1).strip() if m else "Ответ по пункту.")
+            glossary = re.findall(r"^(\S+) — (.+)$", user, re.M)
+            text_out = src
+            for abbr, full in glossary:
+                if abbr and full and abbr not in ("Исходный", "Вопрос", "Цитаты"):
+                    text_out = re.sub(rf"(?<!\w){re.escape(abbr)}(?!\w)", f"{abbr} ({full})", text_out, count=1)
+            text = json.dumps({"text": text_out}, ensure_ascii=False)
             return self.log_usage(LLMResult(text, len(system + user) // 4, len(text) // 4, self.provider, self.model))
         m = re.search(r"<<<ПУНКТ 1>>>\n(.+?)\n<<<КОНЕЦ ПУНКТА 1>>>", user, re.S)
         source = m.group(1).strip() if m else ""

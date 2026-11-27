@@ -206,6 +206,7 @@ class CitationOut(_Model):
     doc_id: str
     doc_title: str = Field(examples=["Положение об отпусках"])
     clause_no: str = Field(examples=["3.1"])
+    label: str = Field(default="", description="Метка подпункта для отображения, например «1.3, подп. 1»")
     page: int | None = None
     ref: str = Field(description="Человекочитаемая ссылка", examples=["Положение об отпусках, п. 3.1"])
     quote: str = Field(description="Дословная цитата из пункта")
@@ -221,6 +222,7 @@ class VariantOut(_Model):
     doc_id: str
     doc_title: str
     clause_no: str
+    label: str = Field(default="", description="Метка подпункта для отображения, например «1.3, подп. 1»")
     page: int | None = None
     ref: str
     section: str | None = None
@@ -244,6 +246,53 @@ class AgentStepOut(_Model):
     status: Literal["ok", "warn", "fail", "skip"]
     detail: str = Field(examples=["Проверено пунктов: 12. Лучший: Положение об отпусках, п. 3.1 (0.97)"])
     ms: int | None = Field(default=None, description="Сколько занял шаг, мс")
+
+
+class EvidenceItemOut(_Model):
+    ref: str = Field(examples=["Положение об отпусках, п. 3.1"])
+    doc_id: str | None = None
+    point_id: str | None = None
+    clause_no: str = ""
+    label: str = Field(default="", description="Метка подпункта для отображения, например «1.3, подп. 1»")
+    link: str | None = Field(default=None, description="Ссылка на пункт в хранилище: /doc/{doc_id}?p={point_id}")
+    score: float | None = Field(default=None, description="Оценка пункта 0..1")
+    role: Literal["cited", "conflict", "variant", "candidate"] = Field(
+        description="cited — пункт в ответе; conflict — один из расходящихся пунктов; variant — вариант для "
+                    "уточнения; candidate — найден, но в ответ не вошёл")
+
+
+class EvidenceOut(_Model):
+    summary: str
+    items: list[EvidenceItemOut] = Field(default_factory=list)
+
+
+class CheckItemOut(_Model):
+    label: str = Field(examples=["Цитата"])
+    status: Literal["ok", "warn", "fail", "skip"]
+    detail: str
+
+
+class CheckOut(_Model):
+    summary: str
+    items: list[CheckItemOut] = Field(default_factory=list)
+
+
+class VerdictOut(_Model):
+    kind: str = Field(description="answer, quote_only, conflict, not_found, escalation, variants, by_division, faq, "
+                                  "clarify, offtopic, refused", examples=["answer"])
+    title: str = Field(examples=["Ответ найден"])
+    confidence: Literal["high", "medium", "low"] | None = None
+    confidence_label: str | None = Field(default=None, examples=["высокая"])
+    score: float | None = None
+    why: str = Field(description="Почему такой вывод: оценка, порог, проверки, эскалация")
+    escalation_id: int | str | None = None
+
+
+class InvestigationOut(_Model):
+    """Ход работы как расследование. Собирается из шагов конвейера, ничего не добавляет от себя."""
+    evidence: EvidenceOut = Field(description="Улики: найденные и процитированные пункты со ссылками")
+    check: CheckOut = Field(description="Сверка: порог, цитата, числа, противоречия, пробелы")
+    verdict: VerdictOut = Field(description="Вердикт: итог, уверенность и почему")
 
 
 class ChatOut(_Model):
@@ -279,6 +328,7 @@ class ChatOut(_Model):
                                                                    "документе, подозрительный текст в пункте")
     iterations: int = Field(default=0, description="Сколько раз агент переформулировал вопрос и искал заново")
     steps: list[AgentStepOut] = Field(default_factory=list, description="Ход работы агента по шагам")
+    investigation: InvestigationOut | None = Field(default=None, description="Ход работы по стадиям: улики, сверка, вердикт")
     outcome: str | None = Field(default=None, description="Итог для аналитики: answer, quote_only, uncertain, "
                                                           "not_found, clarify, by_division, faq, offtopic, refused")
     session_id: str | None = None
@@ -292,6 +342,7 @@ class ChatOut(_Model):
     missing_docs: list[str] = Field(default_factory=list, description="Документы, на которые есть ссылка, но их нет в базе")
     conflict: bool = Field(default=False, description="Пункты противоречат друг другу")
     notice: str | None = Field(default=None, description="Пояснение над ответом (например, о передаче в службу качества)")
+    can_simplify: bool = Field(default=False, description="Можно запросить пересказ ответа простыми словами")
 
     model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [{
         "answer_id": "c0ffee00c0ffee00c0ffee00c0ffee00",
@@ -346,6 +397,7 @@ class OkOut(_Model):
 class ClauseContextOut(_Model):
     point_id: str
     clause_no: str
+    label: str = Field(default="", description="Метка подпункта для отображения, например «1.3, подп. 1»")
     text: str
     ord: int
 
@@ -355,6 +407,7 @@ class ClauseOut(_Model):
     doc_title: str
     box: str
     clause_no: str
+    label: str = Field(default="", description="Метка подпункта для отображения, например «1.3, подп. 1»")
     section: str | None = None
     page: int | None = None
     text: str
@@ -489,6 +542,30 @@ class EscalateIn(_Model):
     answer_id: str = Field(min_length=8, max_length=64, description="Ответ, по которому сотрудник просит помощи")
     session_id: str | None = Field(default=None, max_length=64)
     user_email: str | None = Field(default=None, max_length=200, pattern=r"^$|^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class SimplifyIn(_Model):
+    answer_id: str | None = Field(default=None, min_length=8, max_length=64,
+                                  description="Идентификатор ответа из /api/chat")
+    question: str | None = Field(default=None, max_length=2000, description="Исходный вопрос, если нет answer_id")
+    text: str | None = Field(default=None, max_length=8000, description="Исходный ответ для пересказа")
+    citations: list[CitationOut] | None = Field(default=None, description="Цитаты исходного ответа")
+    glossary: list[dict] | None = Field(default=None, description="Сокращения исходного ответа")
+    advice: str | None = Field(default=None, max_length=500)
+    mode: str | None = Field(default=None, max_length=32)
+    escalated: bool | None = Field(default=None, description="true, если вопрос уже передан в службу качества")
+
+
+class SimplifyOut(_Model):
+    text: str = Field(description="Пересказ простыми словами или исходный текст с раскрытыми сокращениями")
+    advice: str = ""
+    citations: list[CitationOut] = Field(default_factory=list, description="Те же цитаты, без изменений")
+    glossary: list[dict] = Field(default_factory=list)
+    question: str = ""
+    answer_id: str | None = None
+    simplified: bool = Field(description="true, если текст отличается от исходного ответа")
+    source: str = Field(description="model — пересказ модели; fallback — исходный текст с раскрытыми сокращениями")
+    can_simplify: bool = True
 
 
 # чтобы error_responses мог сослаться на ReadyOut, объявление выше уже есть

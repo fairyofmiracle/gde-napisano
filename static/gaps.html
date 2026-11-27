@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Где написано? — где не написано</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/logo-32.png">
+  <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
+  <link rel="stylesheet" href="/static/style.css?v=20261127h">
+</head>
+<body class="admin wiki-page gaps-page">
+  <header class="top">
+    <div class="top-inner">
+      <div class="brand"><img class="brand-logo" src="/static/img/logo-64.png" width="28" height="28" alt="" aria-hidden="true"> Где <em>написано?</em> · где не написано</div>
+      <a class="admin-link" href="/wiki">Хранилище</a>
+      <a class="admin-link" href="/gaps">Где не написано?</a>
+      <a class="admin-link" href="/"><svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg> К чату</a>
+    </div>
+  </header>
+  <section class="panel">
+    <h2>Где не написано?</h2>
+    <p class="muted gaps-lead">Отчёт о пробелах в загруженных регламентах: вопросы без ответа, противоречия, пункты, из-за которых чаще всего создают заявки, и ссылки на документы, которых нет в базе. Почта и имена сотрудников в отчёт не входят.</p>
+    <div class="gaps-exports">
+      <a class="admin-link" href="/api/gaps?format=md">Скачать как .md</a>
+      <a class="admin-link" href="/api/gaps?format=csv">Скачать как .csv</a>
+    </div>
+    <p class="muted" id="gaps-totals">Загружаю…</p>
+  </section>
+  <section class="panel">
+    <h2>Вопросы без ответа в регламентах</h2>
+    <div id="gaps-unanswered">Загружаю…</div>
+  </section>
+  <section class="panel">
+    <h2>Противоречия</h2>
+    <div id="gaps-conflicts">Загружаю…</div>
+  </section>
+  <section class="panel">
+    <h2>Пункты, из-за которых чаще всего создают заявки</h2>
+    <div id="gaps-hot">Загружаю…</div>
+  </section>
+  <section class="panel">
+    <h2>Ссылки на документы, которых нет в базе</h2>
+    <div id="gaps-missing">Загружаю…</div>
+  </section>
+  <section class="panel">
+    <h2>Полный проход по корпусу</h2>
+    <div id="gaps-scan">Загружаю…</div>
+  </section>
+  <script src="/static/gaps.js?v=20261127h"></script>
+</body>
+</html>

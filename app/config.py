@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     reranker_provider: Literal["cross-encoder", "fake"] = "cross-encoder"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_max_length: int = 512
+    rerank_cache_size: int = 4096  # пар «вопрос — пункт» в памяти; 0 — без кэша
+    rerank_batch_size: int = 4
+    query_cache_size: int = 512  # эмбеддингов вопросов в памяти
     model_device: str = "cpu"
 
     # Поиск
@@ -159,6 +162,9 @@ class Settings(BaseSettings):
     smtp_starttls: bool = True
     smtp_ssl: bool = False
     smtp_timeout: float = 15.0
+    # Через запятую. Если задано, настоящие письма уходят только на эти адреса (остальные получатели
+    # из To/Cc пропускаются); если ни один получатель не разрешён, письмо остаётся в outbox.
+    smtp_allowed_recipients: str = ""
     # IMAP для чтения ответов экспертов (пусто = только импорт .eml и форма в операторской)
     imap_host: str = ""
     imap_port: int = 993

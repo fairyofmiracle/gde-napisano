@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request,
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
@@ -53,6 +53,8 @@ from app.schemas import (
     UploadOut,
     VersionOut,
     WikiOut,
+    SimplifyIn,
+    SimplifyOut,
     error_responses,
 )
 from app.security import AdminGuard, client_ip, client_key, require_admin, safe_filename, safe_join
@@ -250,6 +252,14 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     def wiki_page():
         return FileResponse(STATIC / "wiki.html")
 
+    @app.get("/mail", include_in_schema=False)
+    def mail_page():
+        return FileResponse(STATIC / "mail.html")
+
+    @app.get("/gaps", include_in_schema=False)
+    def gaps_page():
+        return FileResponse(STATIC / "gaps.html")
+
     @app.get("/admin", include_in_schema=False)
     def admin_page():
         return FileResponse(STATIC / "admin.html")
@@ -363,11 +373,11 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         cands = json.loads(ans["candidates"] or "[]")
         found = []
         for c in cands[:3]:
-            rows = s.db.query("SELECT text FROM clauses WHERE point_id=?", (c["point_id"],))
+            rows = s.db.query("SELECT text, label FROM clauses WHERE point_id=?", (c["point_id"],))
             if rows:
                 from app.parsing import format_ref
 
-                found.append({"ref": format_ref(c["doc_title"], c["clause_no"]), "text": rows[0]["text"],
+                found.append({"ref": format_ref(c["doc_title"], rows[0]["label"] or c["clause_no"]), "text": rows[0]["text"],
                               "doc_id": c["doc_id"], "doc_title": c["doc_title"], "clause_no": c["clause_no"]})
         div = sess.get("division") or ""
         esc = s.escalations.create(ans["question"], "manual", found,
@@ -379,6 +389,56 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         s.db.execute("UPDATE answers SET escalated=1 WHERE answer_id=?", (body.answer_id,))
         return {"ok": True, "escalation": esc,
                 "text": f"Отправил запрос в службу качества ({esc['to']}), вы в копии ({esc['cc']})."}
+
+    @app.post("/api/simplify", response_model=SimplifyOut, tags=["Чат и поиск"],
+              summary="Пересказать ответ простыми словами",
+              description="Тот же ответ по уже найденным пунктам, без нового поиска. Цитаты и номера пунктов "
+                          "не меняются. Если в пересказе появляются числа, которых нет в исходном ответе и цитатах, "
+                          "возвращается исходный текст с раскрытыми сокращениями. Для ответов без цитат и для "
+                          "передач в службу качества упрощение недоступно.",
+              responses=error_responses(400, 404, 422, 429))
+    async def simplify_answer(body: SimplifyIn, request: Request):
+        s: Services = svc(request)
+        _limit(s, request, "simplify", settings.practice_rate_limit_per_minute,
+               "Слишком много запросов подряд")
+        from app.simplify import can_simplify, payload_from_answer, simplify
+
+        stored_id = body.answer_id
+        payload = None
+        if stored_id:
+            ans = s.memory.get_answer(stored_id)
+            if ans is None:
+                raise HTTPException(404, "Ответ не найден")
+            raw = ans["payload"] if "payload" in ans.keys() else ""
+            if raw and raw not in ("", "{}"):
+                try:
+                    payload = json.loads(raw)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = None
+            if not payload:
+                # ответ записан до появления поля payload: собираем из тела запроса, иначе отказываем
+                if not (body.text and body.citations):
+                    raise HTTPException(400, "Для этого ответа нет сохранённого текста, пришлите сам ответ")
+        if payload is None:
+            payload = payload_from_answer({
+                "question": body.question or "",
+                "mode": body.mode or "confident",
+                "text": body.text or "",
+                "citations": [c.model_dump() if hasattr(c, "model_dump") else c for c in (body.citations or [])],
+                "glossary": body.glossary or [],
+                "advice": body.advice or "",
+                "answer_kind": "answer",
+                "escalated": bool(body.escalated),
+            })
+        else:
+            # если клиент прислал поля, ими не подменяем сохранённый ответ: источник правды — запись в базе
+            pass
+        if not can_simplify(payload):
+            raise HTTPException(400, "Для этого ответа упрощение недоступно")
+        result = await run_in_threadpool(lambda: simplify(s.answers.llm, payload, db=s.db))
+        result["answer_id"] = stored_id
+        result["can_simplify"] = True
+        return result
 
     @app.get("/api/wiki", response_model=WikiOut, tags=["Документы"],
              summary="Список регламентов и разъяснений",
@@ -400,6 +460,38 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             })
         return {"documents": docs, "faq": s.faq.public_list()}
 
+    @app.get("/api/wiki/export", tags=["Документы"], summary="Выгрузка хранилища для Confluence",
+             description="Zip: регламенты по пунктам с якорями и разъяснения службы качества в формате хранения "
+                         "Confluence (storage/*.xml) и обычным HTML (html/*.html), manifest.json с иерархией страниц. "
+                         "Загрузка в пространство: scripts/confluence_upload.py, инструкция в docs/confluence.md.")
+    def wiki_export(request: Request):
+        from fastapi.responses import Response
+
+        from app import confluence
+
+        s: Services = svc(request)
+        body = confluence.build_zip(s.db, s.boxes)
+        return Response(body, media_type="application/zip",
+                        headers={"Content-Disposition": 'attachment; filename="gde-napisano-confluence.zip"'})
+
+    @app.get("/api/gaps", tags=["Документы"], summary="Отчёт «Где не написано?»",
+             description="Пробелы в регламентах: вопросы без ответа, найденные противоречия, пункты, "
+                         "из-за которых чаще всего создают заявки, и ссылки на документы, которых нет в базе. "
+                         "Токен не нужен, в отчёте нет почты и имён сотрудников. format=md или format=csv — скачать отчёт.")
+    def gaps_report(request: Request, format: str | None = Query(default=None, pattern="^(md|csv)?$")):
+        from app import gaps as gaps_mod
+
+        data = gaps_mod.build(svc(request).db)
+        if format == "md":
+            body = gaps_mod.to_markdown(data)
+            return PlainTextResponse(body, media_type="text/markdown; charset=utf-8",
+                                     headers={"Content-Disposition": 'attachment; filename="gde-ne-napisano.md"'})
+        if format == "csv":
+            body = gaps_mod.to_csv(data)
+            return PlainTextResponse(body, media_type="text/csv; charset=utf-8",
+                                     headers={"Content-Disposition": 'attachment; filename="gde-ne-napisano.csv"'})
+        return data
+
     @app.get("/api/documents/{doc_id}/clauses", tags=["Документы"], summary="Документ целиком по пунктам",
              description="Все пункты документа по порядку: для перехода к месту в документе с подсветкой.",
              responses=error_responses(404))
@@ -408,7 +500,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         f = s.db.query("SELECT doc_id, title, box, mtime FROM files WHERE doc_id=?", (doc_id,))
         if not f:
             raise HTTPException(404, "Документ не найден")
-        rows = s.db.query("SELECT point_id, clause_no, section, page, kind, text FROM clauses WHERE doc_id=? "
+        rows = s.db.query("SELECT point_id, clause_no, label, section, page, kind, text FROM clauses WHERE doc_id=? "
                           "ORDER BY ord", (doc_id,))
         from app.answer import doc_date
 
@@ -477,13 +569,14 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         if not rows:
             raise HTTPException(404, "Пункт не найден (возможно, документ обновили)")
         r = rows[0]
-        near = s.db.query("SELECT point_id, clause_no, text, ord FROM clauses WHERE doc_id=? AND ord BETWEEN ? AND ?"
+        near = s.db.query("SELECT point_id, clause_no, label, text, ord FROM clauses WHERE doc_id=? AND ord BETWEEN ? AND ?"
                           " ORDER BY ord", (r["doc_id"], r["ord"] - 2, r["ord"] + 2))
         from app.parsing import format_ref
 
         return {"point_id": point_id, "doc_title": r["title"], "box": r["box"], "clause_no": r["clause_no"],
+                "label": r["label"] or "",
                 "section": r["section"], "page": r["page"], "text": r["text"],
-                "ref": format_ref(r["title"], r["clause_no"], r["page"], r["kind"]),
+                "ref": format_ref(r["title"], r["label"] or r["clause_no"], r["page"], r["kind"]),
                 "context": [dict(x) for x in near],
                 "practice": s.memory.practice_for(r["doc_id"], r["clause_no"], 5)}
 
@@ -687,6 +780,37 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         if not path.is_file():
             raise HTTPException(404, "Письмо не найдено")
         return FileResponse(path, media_type="message/rfc822", filename=name)
+
+    @app.get("/api/operator/mail", tags=["Служба качества", "Админ"], summary="Демо-ящик: список писем",
+             description="Письма службе качества из outbox: тема, заявка ГН-N, дата, прочитано ли. "
+                         "Наружу письма не отправляются.", dependencies=admin, responses=ADMIN_ERRORS)
+    def mail_list(request: Request):
+        from app import mailbox
+
+        return mailbox.list_mail(svc(request).db, settings)
+
+    @app.get("/api/operator/mail/{esc_id}", tags=["Служба качества", "Админ"], summary="Демо-ящик: письмо",
+             description="Текст письма, вопрос, найденные пункты со ссылками. Открытое письмо отмечается прочитанным.",
+             dependencies=admin, responses=error_responses(401, 403, 404))
+    def mail_get(esc_id: int, request: Request):
+        from app import mailbox
+
+        m = mailbox.get_mail(svc(request).db, settings, esc_id)
+        if m is None:
+            raise HTTPException(404, "Письмо не найдено")
+        return m
+
+    @app.post("/api/operator/mail/{esc_id}/read", response_model=OkOut, tags=["Служба качества", "Админ"],
+              summary="Демо-ящик: отметить прочитанным или непрочитанным", dependencies=admin,
+              responses=error_responses(401, 403, 404))
+    def mail_read(esc_id: int, request: Request, read: bool = Query(True)):
+        from app import mailbox
+
+        s = svc(request)
+        if not s.db.query("SELECT 1 FROM escalations WHERE id=?", (esc_id,)):
+            raise HTTPException(404, "Письмо не найдено")
+        mailbox.set_read(s.db, esc_id, read)
+        return {"ok": True}
 
     @app.get("/api/operator/faq", tags=["Служба качества", "Админ"], summary="База разъяснений",
              dependencies=admin, responses=ADMIN_ERRORS)

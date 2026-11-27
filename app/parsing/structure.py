@@ -162,3 +162,28 @@ def _join_lines(lines: list[str]) -> str:
         else:
             out = line
     return out.strip()
+
+
+def sub_item_labels(rows: Iterable[tuple[str, str, str, str]]) -> dict[str, str]:
+    """Метки подпунктов для отображения.
+
+    Нумерованный список внутри пункта («1.3. … то: 1. … 2. …») разбирается как отдельные
+    пункты с номерами «1», «2». Номер в базе не меняется (от него зависит point_id),
+    а для ссылок подпункту ставится метка «1.3, подп. 1».
+
+    rows: (point_id, kind, section, clause_no) в порядке следования в документе.
+    Возвращает {point_id: метка} только для подпунктов.
+    """
+    out: dict[str, str] = {}
+    parent = ""
+    section = None
+    for point_id, kind, sec, no in rows:
+        if sec != section:
+            section, parent = sec, ""
+        if kind != "clause" or not no:
+            continue
+        if "." in no:
+            parent = no
+        elif no.isdigit() and parent:
+            out[point_id] = f"{parent}, подп. {no}"
+    return out

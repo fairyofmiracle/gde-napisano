@@ -49,6 +49,49 @@ def _glossary(items: list[dict] | None) -> str:
     return "Сокращения: " + "; ".join(f"{g['abbr']} — {g['full']}" for g in items)
 
 
+def _short_ref(i: dict) -> str:
+    no = i.get("label") or i.get("clause_no")
+    return f"п. {no}" if no else (i.get("ref") or "")
+
+
+def investigation_brief(inv: dict | None) -> str:
+    """Ход работы по строке на стадию: улики, сверка, вердикт."""
+    if not inv:
+        return ""
+    ev, ch, vd = inv.get("evidence") or {}, inv.get("check") or {}, inv.get("verdict") or {}
+    refs = [_short_ref(i) for i in ev.get("items") or [] if i.get("role") in ("cited", "conflict", "variant")][:4]
+    summary = str(ev.get("summary") or "")
+    lines = ["Ход работы"]
+    lines.append("Улики: " + (", ".join(refs) + (f" ({summary[:1].lower() + summary[1:]})" if summary else "")
+                              if refs else summary))
+    if ch.get("summary"):
+        lines.append("Сверка: " + _cut(str(ch["summary"]), 220))
+    v = str(vd.get("title") or "")
+    if vd.get("confidence_label"):
+        v += f", уверенность {vd['confidence_label']}"
+    if v:
+        lines.append("Вердикт: " + v)
+    return "\n".join(lines)
+
+
+def can_simplify(data: dict | None) -> bool:
+    if not data or data.get("escalation") or data.get("escalated"):
+        return False
+    if data.get("can_simplify") is True:
+        return bool(data.get("answer_id"))
+    return (data.get("mode") == "confident" and bool(data.get("citations"))
+            and data.get("answer_kind") != "quote_only" and bool(data.get("answer_id")))
+
+
+def format_simplified(data: dict, base_url: str = "") -> str:
+    parts = ["Тот же ответ, простыми словами:", str(data.get("text") or "").strip()]
+    if data.get("advice"):
+        parts.append(f"Что делать: {data['advice']}")
+    parts.append(_citations(data.get("citations") or [], base_url))
+    parts.append(_glossary(data.get("glossary")))
+    return "\n\n".join(p for p in parts if p)
+
+
 def format_answer(data: dict, base_url: str = "") -> str:
     mode = data.get("mode")
     parts: list[str] = []
@@ -97,6 +140,7 @@ def format_answer(data: dict, base_url: str = "") -> str:
         parts.append(_escalation(data.get("escalation")))
         if not data.get("escalation"):
             parts.append(_owner_line(data.get("owner")))
+    parts.append(investigation_brief(data.get("investigation")))
     return "\n\n".join(p for p in parts if p)
 
 

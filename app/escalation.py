@@ -128,21 +128,43 @@ class EscalationService:
         msg.set_content("\n".join(lines))
         return msg
 
+    def allowed_recipients(self, msg: EmailMessage) -> list[str] | None:
+        """Получатели настоящего письма. None — ограничения нет; [] — никому из получателей слать нельзя."""
+        allow = {a.strip().lower() for a in (self.settings.smtp_allowed_recipients or "").split(",") if a.strip()}
+        if not allow:
+            return None
+        rcpt = [parseaddr(a)[1] for h in ("To", "Cc") for a in str(msg.get(h) or "").split(",")]
+        return [a for a in dict.fromkeys(r for r in rcpt if r) if a.lower() in allow]
+
+    def send(self, msg: EmailMessage) -> None:
+        """Отправка через SMTP; исключение, если не вышло."""
+        s = self.settings
+        rcpt = self.allowed_recipients(msg)
+        if rcpt == []:
+            raise smtplib.SMTPRecipientsRefused({})
+        ctx = ssl.create_default_context()
+        if s.smtp_ssl:
+            server = smtplib.SMTP_SSL(s.smtp_host, s.smtp_port, timeout=s.smtp_timeout, context=ctx)
+        else:
+            server = smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=s.smtp_timeout)
+        with server:
+            if s.smtp_starttls and not s.smtp_ssl:
+                server.starttls(context=ctx)
+            if s.smtp_user:
+                server.login(s.smtp_user, s.smtp_password)
+            if rcpt is None:
+                server.send_message(msg)
+            else:
+                server.send_message(msg, to_addrs=rcpt)
+
     def _deliver(self, esc_id: int, msg: EmailMessage) -> tuple[str, str]:
         s = self.settings
+        if s.smtp_host and self.allowed_recipients(msg) == []:
+            log.info("Письмо ГН-%s: получатели не входят в SMTP_ALLOWED_RECIPIENTS, сохраняю в outbox", esc_id)
+            return "outbox", self._save(esc_id, msg)
         if s.smtp_host:
             try:
-                ctx = ssl.create_default_context()
-                if s.smtp_ssl:
-                    server = smtplib.SMTP_SSL(s.smtp_host, s.smtp_port, timeout=s.smtp_timeout, context=ctx)
-                else:
-                    server = smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=s.smtp_timeout)
-                with server:
-                    if s.smtp_starttls and not s.smtp_ssl:
-                        server.starttls(context=ctx)
-                    if s.smtp_user:
-                        server.login(s.smtp_user, s.smtp_password)
-                    server.send_message(msg)
+                self.send(msg)
                 return "smtp", self._save(esc_id, msg)
             except (OSError, smtplib.SMTPException) as e:
                 log.error("Письмо в службу качества не отправлено (%s), сохраняю в outbox", type(e).__name__)

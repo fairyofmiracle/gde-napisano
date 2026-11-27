@@ -5,6 +5,7 @@ import hashlib
 import logging
 import math
 import threading
+from collections import OrderedDict
 
 import numpy as np
 
@@ -22,14 +23,50 @@ def sigmoid(x: float) -> float:
     return z / (1.0 + z)
 
 
+class LRUCache:
+    """Небольшой потокобезопасный кэш: одинаковый вопрос и пункт дают одну и ту же оценку."""
+
+    def __init__(self, size: int) -> None:
+        self.size = max(0, int(size))
+        self._data: OrderedDict = OrderedDict()
+        self._lock = threading.Lock()
+        self.hits = self.misses = 0
+
+    def get(self, key):
+        if not self.size:
+            return None
+        with self._lock:
+            v = self._data.get(key)
+            if v is None:
+                self.misses += 1
+                return None
+            self._data.move_to_end(key)
+            self.hits += 1
+            return v
+
+    def put(self, key, value) -> None:
+        if not self.size:
+            return
+        with self._lock:
+            self._data[key] = value
+            self._data.move_to_end(key)
+            while len(self._data) > self.size:
+                self._data.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+
 class E5Embedder:
     """intfloat/multilingual-e5-*: префиксы «query: » и «passage: » обязательны."""
 
-    def __init__(self, model_name: str, device: str = "cpu") -> None:
+    def __init__(self, model_name: str, device: str = "cpu", cache_size: int = 512) -> None:
         self.model_name = model_name
         self.device = device
         self._model = None
         self._lock = threading.Lock()
+        self.query_cache = LRUCache(cache_size)
 
     @property
     def model(self):
@@ -54,8 +91,16 @@ class E5Embedder:
                                  batch_size=16, convert_to_numpy=True).astype(np.float32)
 
     def embed_queries(self, texts: list[str]) -> np.ndarray:
-        return self.model.encode([f"query: {t}" for t in texts], normalize_embeddings=True,
-                                 convert_to_numpy=True).astype(np.float32)
+        cached = [self.query_cache.get(t) for t in texts]
+        todo = [t for t, v in zip(texts, cached) if v is None]
+        if todo:
+            vecs = self.model.encode([f"query: {t}" for t in todo], normalize_embeddings=True,
+                                     convert_to_numpy=True).astype(np.float32)
+            fresh = dict(zip(todo, vecs))
+            for t, v in fresh.items():
+                self.query_cache.put(t, v)
+            cached = [v if v is not None else fresh[t] for t, v in zip(texts, cached)]
+        return np.stack(cached).astype(np.float32) if cached else np.zeros((0, self.dim), dtype=np.float32)
 
 
 class FakeEmbedder:
@@ -81,12 +126,17 @@ class FakeEmbedder:
 class CrossEncoderReranker:
     """BAAI/bge-reranker-v2-m3: сырой логит → сигмоида, оценка строго в [0, 1]."""
 
-    def __init__(self, model_name: str, device: str = "cpu", max_length: int = 512) -> None:
+    def __init__(self, model_name: str, device: str = "cpu", max_length: int = 512, cache_size: int = 4096,
+                 batch_size: int = 4) -> None:
         self.model_name = model_name
         self.device = device
         self.max_length = max_length
         self._model = None
         self._lock = threading.Lock()
+        # Оценка пары «вопрос — пункт» не зависит от остальных пар: повторный поиск по тому же вопросу
+        # (уточнение подразделения, ответ по подразделениям, повтор вопроса) не пересчитывает реранкер.
+        self.cache = LRUCache(cache_size)
+        self.batch_size = max(1, int(batch_size))
 
     @property
     def model(self):
@@ -106,9 +156,17 @@ class CrossEncoderReranker:
             return []
         import torch
 
-        logits = self.model.predict([(query, p) for p in passages], batch_size=8,
-                                    activation_fn=torch.nn.Identity(), show_progress_bar=False)
-        return [min(1.0, max(0.0, sigmoid(float(x)))) for x in np.asarray(logits).reshape(-1)]
+        out = [self.cache.get((query, p)) for p in passages]
+        todo = sorted({p for p, v in zip(passages, out) if v is None}, key=len)
+        if todo:
+            # короткие пункты вместе: меньше дополнения до длины самого длинного в пачке, оценки те же
+            logits = self.model.predict([(query, p) for p in todo], batch_size=self.batch_size,
+                                        activation_fn=torch.nn.Identity(), show_progress_bar=False)
+            fresh = {p: min(1.0, max(0.0, sigmoid(float(x)))) for p, x in zip(todo, np.asarray(logits).reshape(-1))}
+            for p, v in fresh.items():
+                self.cache.put((query, p), v)
+            out = [v if v is not None else fresh[p] for p, v in zip(passages, out)]
+        return out
 
 
 class FakeReranker:
@@ -126,10 +184,11 @@ class FakeReranker:
 def make_embedder(settings):
     if settings.embed_provider == "fake":
         return FakeEmbedder()
-    return E5Embedder(settings.embed_model, settings.model_device)
+    return E5Embedder(settings.embed_model, settings.model_device, getattr(settings, "query_cache_size", 512))
 
 
 def make_reranker(settings):
     if settings.reranker_provider == "fake":
         return FakeReranker()
-    return CrossEncoderReranker(settings.reranker_model, settings.model_device, settings.reranker_max_length)
+    return CrossEncoderReranker(settings.reranker_model, settings.model_device, settings.reranker_max_length,
+                                getattr(settings, "rerank_cache_size", 4096), getattr(settings, "rerank_batch_size", 4))

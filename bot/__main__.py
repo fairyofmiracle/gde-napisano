@@ -49,6 +49,15 @@ def build_dispatcher(service: BotService):
             await msg.edit_reply_markup(reply_markup=None)
         await service.handle_division(user_id, (cb.data or "")[4:], replier(msg))
 
+    @router.callback_query(F.data.startswith("simp:"))
+    async def simplify_answer(cb: CallbackQuery) -> None:
+        msg = cb.message
+        user_id = cb.from_user.id if cb.from_user else 0
+        await cb.answer()
+        if msg is None or not service.chat_allowed(msg.chat.type, msg.chat.id, bool(cb.from_user and cb.from_user.is_bot)):
+            return
+        await service.handle_simplify(user_id, (cb.data or "")[5:], replier(msg))
+
     @router.message(CommandStart())
     @router.message(Command("help"))
     async def start(message: Message) -> None:

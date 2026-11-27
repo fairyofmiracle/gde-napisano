@@ -29,10 +29,15 @@ class Candidate:
     score: float = 0.0  # итоговая оценка 0..1
     rerank_score: float = 0.0  # оценка реранкера 0..1 до поправки памяти
     memory: float = 0.0  # чистый вклад памяти (да − нет)
+    label: str = ""  # метка подпункта для отображения («1.3, подп. 1»)
+
+    @property
+    def shown_no(self) -> str:
+        return self.label or self.clause_no
 
     @property
     def ref(self) -> str:
-        return format_ref(self.doc_title, self.clause_no, self.page, self.kind)
+        return format_ref(self.doc_title, self.shown_no, self.page, self.kind)
 
     @property
     def key(self) -> tuple[str, str]:
@@ -151,7 +156,7 @@ class Searcher:
             return []
         marks = ",".join("?" * len(ids))
         rows = self.db.query(
-            "SELECT c.point_id, c.doc_id, f.title, f.box, c.clause_no, c.section, c.page, c.kind, c.text "
+            "SELECT c.point_id, c.doc_id, f.title, f.box, c.clause_no, c.section, c.page, c.kind, c.text, c.label "
             f"FROM clauses c JOIN files f ON f.doc_id = c.doc_id WHERE c.point_id IN ({marks})", tuple(ids))
         by_id = {r["point_id"]: r for r in rows}
         out = []
@@ -160,5 +165,5 @@ class Searcher:
             if r is None:
                 continue  # точка осталась в Qdrant, но документа уже нет — не показываем
             out.append(Candidate(pid, r["doc_id"], r["title"], r["box"], r["clause_no"], r["section"], r["page"],
-                                 r["kind"], r["text"]))
+                                 r["kind"], r["text"], label=r["label"] or ""))
         return out

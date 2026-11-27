@@ -10,7 +10,7 @@ from pathlib import Path
 
 from bot.api import ApiError, DocagentClient, RateLimited
 from bot.audio import AudioError, convert_to_wav
-from bot.formatting import format_answer, split_message
+from bot.formatting import can_simplify, format_answer, format_simplified, split_message
 from bot.limiter import UserRateLimiter
 from bot.settings import BotSettings
 from bot.transcribe import Transcriber
@@ -152,8 +152,13 @@ class BotService:
             for part in parts[:-1]:
                 await reply(part)
             return await reply(parts[-1] if parts else "В каком вы подразделении?", buttons)
-        for part in parts:
+        buttons = None
+        if can_simplify(data):
+            buttons = [("Не понял", f"simp:{data['answer_id']}")]
+        for part in parts[:-1]:
             await reply(part)
+        if parts:
+            await reply(parts[-1], buttons)
 
     async def handle_division(self, user_id: int, division: str, reply: Reply) -> None:
         """Нажата кнопка подразделения: отвечаем на отложенный вопрос по его регламенту."""
@@ -165,6 +170,26 @@ class BotService:
         if not self.limiter.allow(user_id):
             return await reply(MSG_BUSY)
         await self._answer(question, reply, user_id, division=division[:32])
+
+    async def handle_simplify(self, user_id: int, answer_id: str, reply: Reply) -> None:
+        if not self.allowed(user_id):
+            return await reply(MSG_DENIED)
+        if not self.limiter.allow(user_id):
+            return await reply(MSG_BUSY)
+        try:
+            data = await self.api.simplify(answer_id)
+        except RateLimited as e:
+            return await reply(f"Слишком много вопросов подряд, подождите {e.retry_after} с.")
+        except ApiError as e:
+            if str(e) == "simplify_unavailable":
+                return await reply("Для этого ответа упрощение недоступно.")
+            if str(e) == "answer_not_found":
+                return await reply("Ответ уже неактуален. Задайте вопрос ещё раз.")
+            log.error("docagent simplify: %s", e)
+            return await reply(MSG_APP_DOWN)
+        parts = split_message(format_simplified(data, self.settings.web_public_url))
+        for part in parts:
+            await reply(part)
 
     async def unload_if_idle(self, now: float | None = None) -> bool:
         """Выгружает модель, если голосовых давно не было. Возвращает True, если выгрузила."""

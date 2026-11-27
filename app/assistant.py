@@ -13,8 +13,10 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+from app import investigation
 from app.escalation import EscalationError
 from app.guard import missing_documents, off_topic
+from app.simplify import can_simplify, payload_from_answer
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +58,25 @@ class Assistant:
                 return dict(rows[0])
         return {"session_id": session_id, "division": "", "clarify_count": 0, "pending_question": "",
                 "user_email": "", "user_name": ""}
+
+    def _attach_labels(self, out: dict) -> None:
+        """Подставить метки подпунктов («1.3, подп. 1») в ссылки ответа; point_id и номера не меняются."""
+        items = list(out.get("citations") or []) + list(out.get("variants") or [])
+        for sec in out.get("sections") or []:
+            items += list(sec.get("citations") or []) + list(sec.get("variants") or [])
+        ids = sorted({i["point_id"] for i in items if i.get("point_id")})
+        if not ids:
+            return
+        try:
+            rows = self.db.query(f"SELECT point_id, label FROM clauses WHERE point_id IN ({','.join('?' * len(ids))})",
+                                 tuple(ids))
+        except Exception:  # старая база без колонки label
+            return
+        labels = {r["point_id"]: r["label"] for r in rows if r["label"]}
+        for i in items:
+            lab = labels.get(i.get("point_id"))
+            if lab:
+                i["label"] = lab
 
     def save_session(self, sess: dict) -> None:
         if not sess.get("session_id"):
@@ -315,6 +336,7 @@ class Assistant:
         sd = sess.get("division") or ""
         out["profile"] = {"division": sd, "division_name": self.boxes.name(sd) if sd and sd != UNKNOWN else "",
                           "user_email": sess.get("user_email") or self.settings.demo_user_email}
+        self._attach_labels(out)
         for c in out.get("citations") or []:
             c["link"] = f"/doc/{c['doc_id']}?p={c['point_id']}"
         for v in out.get("variants") or []:
@@ -322,6 +344,8 @@ class Assistant:
         for sec in out.get("sections") or []:
             for c in sec["citations"] + sec["variants"]:
                 c["link"] = f"/doc/{c['doc_id']}?p={c['point_id']}"
+        out["can_simplify"] = can_simplify(out)
+        out["investigation"] = investigation.build(out, cands, self.settings)
         self.save_session(sess)
         if record:
             self._record(out, cands, sess, outcome)
@@ -345,7 +369,9 @@ class Assistant:
             self.db.execute("UPDATE answers SET mode=?, latency_ms=? WHERE answer_id=?",
                             (out["mode"], out["latency_ms"], out["answer_id"]))
         div = (out.get("division") or {}).get("id") or sess.get("division") or ""
-        self.db.execute("UPDATE answers SET outcome=?, division=?, session_id=?, cited=?, escalated=? "
+        self.db.execute("UPDATE answers SET outcome=?, division=?, session_id=?, cited=?, escalated=?, payload=? "
                         "WHERE answer_id=?", (outcome, div, sess.get("session_id") or "",
                                               json.dumps(cited, ensure_ascii=False),
-                                              int(bool(out.get("escalation"))), out["answer_id"]))
+                                              int(bool(out.get("escalation"))),
+                                              json.dumps(payload_from_answer(out), ensure_ascii=False),
+                                              out["answer_id"]))

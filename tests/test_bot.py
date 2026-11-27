@@ -74,7 +74,7 @@ def make_api(payload=CONFIDENT, status=200, headers=None, seen=None):
 def collector():
     out: list[str] = []
 
-    async def reply(text: str) -> None:
+    async def reply(text: str, buttons=None) -> None:
         out.append(text)
 
     return out, reply
@@ -723,3 +723,60 @@ def test_bot_formats_escalation_and_faq():
                                                                      "created_at": "2026-11-26 20:00:00"}})
     assert "Разъяснение службы качества" in f
     assert format_answer({"mode": "offtopic", "text": "Обратитесь к руководителю."}) == "Обратитесь к руководителю."
+
+
+def test_bot_simplify_button_only_for_regulation_answer():
+    from bot.formatting import can_simplify
+    from bot.service import BotService
+
+    assert not can_simplify(CONFIDENT)  # нет answer_id
+    confident = dict(CONFIDENT, answer_id="abc12345abc12345abc12345abc12345", can_simplify=True)
+    assert can_simplify(confident)
+    assert not can_simplify(dict(confident, escalation={"id": 1}))
+    assert not can_simplify(NOT_FOUND)
+    assert not can_simplify(UNCERTAIN)
+
+
+class _SimplifyApi:
+    def __init__(self):
+        self.asked = []
+        self.simplified = []
+
+    async def ask(self, question, session_id=None, division=None):
+        self.asked.append((question, session_id, division))
+        return {"mode": "confident", "text": "ПА должен принять заявку за 4 рабочих часа [1].",
+                "answer_id": "abcd1234abcd1234abcd1234abcd1234", "can_simplify": True,
+                "citations": [{"n": 1, "ref": "Пресейловая деятельность Дирекции ИБ, п. 5.1",
+                               "quote": "принять заявку за 4 рабочих часа"}],
+                "glossary": [{"abbr": "ПА", "full": "пресейл-архитектор"}],
+                "escalation": None}
+
+    async def simplify(self, answer_id):
+        self.simplified.append(answer_id)
+        return {"text": "ПА (пресейл-архитектор) должен принять заявку за 4 рабочих часа [1].",
+                "citations": [{"n": 1, "ref": "Пресейловая деятельность Дирекции ИБ, п. 5.1",
+                               "quote": "принять заявку за 4 рабочих часа"}],
+                "glossary": [{"abbr": "ПА", "full": "пресейл-архитектор"}],
+                "advice": "", "simplified": True, "source": "model"}
+
+
+def test_bot_simplify_button_and_reply():
+    from bot.service import BotService
+    from bot.settings import BotSettings
+
+    api = _SimplifyApi()
+    svc = BotService(BotSettings(_env_file=None, telegram_open=True, web_public_url="http://example.local"), api, None)
+    out = []
+
+    async def reply(text, buttons=None):
+        out.append((text, buttons))
+
+    asyncio.run(svc.handle_text(5, "За какой срок ПА должен принять заявку?", reply))
+    assert out[-1][1] == [("Не понял", "simp:abcd1234abcd1234abcd1234abcd1234")]
+    asyncio.run(svc.handle_simplify(5, "abcd1234abcd1234abcd1234abcd1234", reply))
+    assert api.simplified == ["abcd1234abcd1234abcd1234abcd1234"]
+    text = out[-1][0]
+    assert "простыми словами" in text
+    assert "пресейл-архитектор" in text
+    assert "4 рабочих часа" in text
+    assert "п. 5.1" in text

@@ -41,5 +41,27 @@ class DocagentClient:
         except ValueError as e:
             raise ApiError("Приложение вернуло не JSON") from e
 
+    async def simplify(self, answer_id: str) -> dict:
+        try:
+            r = await self._http.post("/api/simplify", json={"answer_id": answer_id})
+        except httpx.HTTPError as e:
+            raise ApiError(f"Приложение недоступно: {type(e).__name__}") from e
+        if r.status_code == 429:
+            try:
+                retry = int(r.headers.get("retry-after", "60"))
+            except ValueError:
+                retry = 60
+            raise RateLimited(retry)
+        if r.status_code == 400:
+            raise ApiError("simplify_unavailable")
+        if r.status_code == 404:
+            raise ApiError("answer_not_found")
+        if r.status_code != 200:
+            raise ApiError(f"Приложение ответило кодом {r.status_code}")
+        try:
+            return r.json()
+        except ValueError as e:
+            raise ApiError("Приложение вернуло не JSON") from e
+
     async def close(self) -> None:
         await self._http.aclose()

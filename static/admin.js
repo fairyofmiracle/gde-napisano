@@ -75,6 +75,11 @@ async function loadQuality() {
     if (e.eml) { const a = document.createElement("a"); a.href = "#"; a.textContent = e.delivery === "smtp" ? " · копия письма" : " · .eml в исходящих"; a.onclick = (ev) => { ev.preventDefault(); openEml(e.eml); }; who.append(a); }
     return tr(td(`ГН-${e.id}`, e.created_at, e.question, e.reason_text, who, STATUS[e.status] || e.status, answerCell(e)));
   }));
+  const want = new URLSearchParams(location.search).get("esc");
+  if (want) {
+    const row = [...$("esc").children].find(r => r.firstChild && r.firstChild.textContent === `ГН-${want}`);
+    if (row) { row.classList.add("esc-target"); row.scrollIntoView({ block: "center" }); const ta = row.querySelector("textarea"); if (ta) ta.focus(); }
+  }
   $("faq").replaceChildren(...faq.map(f => tr(td(f.question, f.answer, [f.doc_title, f.clause_no].filter(Boolean).join(", п. "), f.hits))));
   const lat = an.latency_ms, cost = an.cost;
   const kpi = (label, value) => { const d = document.createElement("div"); d.className = "kpi"; const b = document.createElement("b"); b.textContent = value; d.append(b, label); return d; };

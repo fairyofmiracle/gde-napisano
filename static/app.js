@@ -23,8 +23,12 @@ function refreshLogin() {
   const ROLES = { employee: "сотрудник", expert: "эксперт службы качества", admin: "администратор" };
   if (link) link.textContent = u.email ? `${u.name} (${ROLES[u.role] || ROLES.employee})` : "Войти";
   const qa = document.getElementById("qa-link"), adm = document.getElementById("admin-link");
+  const gaps = document.getElementById("gaps-link");
   if (qa) qa.hidden = !(u.role === "expert" || u.role === "admin");
   if (adm) adm.hidden = u.role !== "admin";
+  if (gaps) gaps.hidden = !(u.role === "expert" || u.role === "admin");
+  const mail = document.getElementById("mail-link");
+  if (mail) mail.hidden = !(u.role === "expert" || u.role === "admin");
 }
 (function initLogin() {
   const dlg = document.getElementById("login");
@@ -244,7 +248,7 @@ function modePlaque(mode) {
 function sourceLine(c) {
   return el("div", { class: "source" },
     el("span", { class: "source-file" }, c.doc_title || c.ref),
-    c.clause_no ? el("span", {}, "п. " + c.clause_no) : null,
+    (c.label || c.clause_no) ? el("span", {}, "п. " + (c.label || c.clause_no)) : null,
     c.page ? el("span", {}, "с. " + c.page) : null,
     c.doc_date ? el("span", { class: "muted" }, "файл от " + c.doc_date) : null,
     c.link ? el("a", { href: c.link, class: "ref", target: "_blank", rel: "noopener" }, "открыть в документе") : null,
@@ -384,6 +388,108 @@ function stepsBlock(steps, iterations) {
   return el("details", { class: "steps" }, summary, list);
 }
 
+// Ход работы как расследование: улики, сверка, вердикт. Подробные шаги — внутри, свёрнуты.
+const ROLE_LABEL = { cited: "в ответе", conflict: "расходится", variant: "вариант", candidate: "найден" };
+
+function investigationBlock(ans) {
+  const inv = ans.investigation;
+  if (!inv) return stepsBlock(ans.steps, ans.iterations);
+  const steps = ans.steps || [];
+  const total = steps.reduce((a, s) => a + (s.ms || 0), 0);
+  const v = inv.verdict || {};
+  const summary = el("summary", { class: "steps-summary" },
+    el("span", {}, "Ход работы"),
+    el("span", { class: "steps-meta" }, "улики, сверка, вердикт" + (v.title ? `: ${v.title.toLowerCase()}` : "")));
+  const ev = inv.evidence || { items: [] };
+  const evList = el("ul", { class: "inv-list" }, (ev.items || []).map(i => el("li", { class: `inv-ev inv-${i.role}` },
+    i.link ? refLink(i, i.ref, "clause") : el("span", {}, i.ref),
+    el("span", { class: "inv-tag" }, ROLE_LABEL[i.role] || i.role),
+    i.score != null ? el("span", { class: "step-ms" }, i.score.toFixed(2)) : null)));
+  const ch = inv.check || { items: [] };
+  const chList = el("ul", { class: "inv-list" }, (ch.items || []).map(i => el("li", { class: `step step-${i.status}` },
+    el("span", { class: "step-dot", "aria-hidden": "true" }),
+    el("div", { class: "step-body" },
+      el("div", { class: "step-head" }, el("b", {}, i.label),
+        el("span", { class: "step-status" }, STEP_MARK[i.status] || i.status)),
+      el("div", { class: "step-detail" }, i.detail)))));
+  const vd = el("div", { class: `inv-verdict inv-v-${v.kind || ""}` },
+    el("div", { class: "step-head" }, el("b", {}, v.title || ""),
+      v.confidence_label ? el("span", { class: "step-status" }, `уверенность: ${v.confidence_label}`) : null),
+    v.why ? el("div", { class: "step-detail" }, v.why) : null);
+  const stage = (n, title, note, body) => el("section", { class: "inv-stage" },
+    el("div", { class: "inv-title" }, el("span", { class: "inv-n" }, n), el("b", {}, title),
+      note ? el("span", { class: "steps-meta" }, note) : null), body);
+  const parts = [
+    stage("1", "Улики", ev.summary, ev.items && ev.items.length ? evList : null),
+    stage("2", "Сверка", null, ch.items && ch.items.length ? chList : el("div", { class: "step-detail" }, ch.summary)),
+    stage("3", "Вердикт", null, vd),
+  ];
+  const raw = stepsBlock(steps, ans.iterations);
+  if (raw) {
+    raw.classList.add("steps-raw");
+    raw.querySelector(".steps-summary > span").textContent = "Все шаги";
+  }
+  return el("details", { class: "steps investigation" }, summary, el("div", { class: "inv-body" }, ...parts, raw));
+}
+
+function canSimplify(ans) {
+  return !!(ans && (ans.can_simplify || (ans.mode === "confident" && !ans.escalation
+    && (ans.citations || []).length && ans.answer_kind !== "quote_only")));
+}
+
+function simplifyRow(ans) {
+  if (!canSimplify(ans)) return null;
+  const original = ans.text;
+  const row = el("div", { class: "simplify-row" });
+  const note = el("div", { class: "answer-note simplify-note", hidden: true }, "Тот же ответ, простыми словами.");
+  const btn = el("button", { type: "button", class: "none" }, "Не понял");
+  let state = "orig";
+  let simpleText = null;
+  function setText(text) {
+    const box = row.closest(".msg");
+    const current = box && box.querySelector(".answer-text");
+    if (current) current.replaceWith(textWithRefs(text, ans.citations));
+  }
+  btn.addEventListener("click", async () => {
+    if (state === "simple") {
+      setText(original);
+      note.hidden = true;
+      btn.textContent = "Не понял";
+      state = "orig";
+      return;
+    }
+    if (simpleText == null) {
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = "Пересказываю…";
+      try {
+        const r = await api("/api/simplify", {
+          answer_id: ans.answer_id,
+          question: ans.question,
+          text: ans.text,
+          citations: ans.citations,
+          glossary: ans.glossary,
+          advice: ans.advice,
+          mode: ans.mode,
+        });
+        simpleText = r.text || ans.text;
+      } catch (err) {
+        btn.textContent = prev;
+        btn.disabled = false;
+        alert(err.message);
+        return;
+      }
+      btn.disabled = false;
+    }
+    setText(simpleText);
+    note.hidden = false;
+    btn.textContent = "Исходная формулировка";
+    state = "simple";
+  });
+  row.append(note, btn);
+  return row;
+}
+
 function warningsBlock(items) {
   if (!items || !items.length) return null;
   return el("div", { class: "warnings" }, items.map(w => el("div", { class: "warning" }, w)));
@@ -405,6 +511,7 @@ function renderAnswer(ans) {
     const owner = ownerBlock(ans.owner); if (owner) box.append(owner);
     const g = glossaryBlock(ans.glossary); if (g) box.append(g);
     const e = escalationBlock(ans.escalation); if (e) box.append(e);
+    const simp = simplifyRow(ans); if (simp) box.append(simp);
     box.append(feedbackRow(ans, box));
   } else if (ans.mode === "uncertain") {
     box.append(el("div", { class: "answer-text" }, ans.text));
@@ -439,7 +546,7 @@ function renderAnswer(ans) {
     const ownerN = ownerBlock(ans.owner); if (ownerN) box.append(ownerN);
     if (!ans.escalation) practiceForm(ans.answer_id, null, box, "Знаете ответ? Напишите, как решается вопрос, — сохраню как пример из практики.");
   }
-  const steps = stepsBlock(ans.steps, ans.iterations);
+  const steps = investigationBlock(ans);
   if (steps) box.append(steps);
   chat.append(box);
   scrollDown();
@@ -455,7 +562,7 @@ async function openClause(pointId) {
     fill(body,
       el("h2", {}, c.ref), c.section ? el("div", { class: "muted" }, c.section) : null,
       el("div", { class: "context" }, (c.context || []).map(x => el("p", { class: x.point_id === pointId ? "hl" : "" },
-        x.clause_no ? el("b", {}, x.clause_no + " ") : null, x.text))),
+        (x.label || x.clause_no) ? el("b", {}, (x.label || x.clause_no) + " ") : null, x.text))),
       practiceBlock(c.practice, "Практика по этому пункту"));
   } catch (err) { body.textContent = err.message; }
 }

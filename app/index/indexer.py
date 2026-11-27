@@ -86,12 +86,28 @@ class Indexer:
         self.rebuild_bm25()
 
     def rebuild_bm25(self) -> None:
+        self.refresh_labels()
         rows = self.db.query(
             "SELECT c.point_id, f.box, f.title, c.section, c.clause_no, c.text, c.kind "
             "FROM clauses c JOIN files f ON f.doc_id = c.doc_id"
         )
         self.bm25.rebuild([(r["point_id"], r["box"],
                             search_text(r["title"], r["section"], r["clause_no"], r["text"], r["kind"])) for r in rows])
+
+    def refresh_labels(self) -> int:
+        """Пересчитать метки подпунктов. Меняется только колонка label, point_id и тексты не трогаются."""
+        from app.parsing.structure import sub_item_labels
+        changed = 0
+        for f in self.db.query("SELECT doc_id FROM files"):
+            rows = self.db.query("SELECT point_id, kind, section, clause_no, label FROM clauses "
+                                 "WHERE doc_id=? ORDER BY ord", (f["doc_id"],))
+            want = sub_item_labels((r["point_id"], r["kind"], r["section"], r["clause_no"]) for r in rows)
+            for r in rows:
+                new = want.get(r["point_id"], "")
+                if (r["label"] or "") != new:
+                    self.db.execute("UPDATE clauses SET label=? WHERE point_id=?", (new, r["point_id"]))
+                    changed += 1
+        return changed
 
     def box_for(self, rel_path: str, clauses: list[Clause] | None, title: str) -> str:
         first = rel_path.split("/", 1)[0] if "/" in rel_path else ""

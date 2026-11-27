@@ -91,6 +91,19 @@ def check(item: dict, ans: dict, extra: dict) -> tuple[bool, str]:
     return False, "?"
 
 
+STAGES = ("route", "retrieve", "rerank", "rewrite", "generate", "conflict")
+
+
+def stage_ms(*answers: dict) -> dict:
+    """Сумма времени по шагам конвейера (по всем подразделениям и по первому вопросу с уточнением)."""
+    out: dict[str, int] = {}
+    for a in answers:
+        for st in (a or {}).get("steps") or []:
+            if st.get("ms"):
+                out[st["step"]] = out.get(st["step"], 0) + int(st["ms"])
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--docs", type=Path, default=ROOT / "data" / "docs")
@@ -139,7 +152,9 @@ def main() -> int:
                                    "refs": [c["ref"] for c in x["citations"]]} for x in ans.get("sections") or []],
                      "escalation": bool(ans.get("escalation")), "missing_docs": ans.get("missing_docs"),
                      "glossary": ans.get("glossary"), "tokens": ans.get("tokens"),
-                     "first_mode": extra.get("first", {}).get("mode")})
+                     "first_mode": extra.get("first", {}).get("mode"),
+                     "stages": stage_ms(extra["first"], ans) if extra.get("first") is not None
+                     and extra["first"] is not ans else stage_ms(ans)})
         print(f"{item['id']} {'OK ' if ok else 'BAD'} {ms:6d} мс  {why}", flush=True)
     by = defaultdict(list)
     for r in rows:
@@ -156,6 +171,11 @@ def main() -> int:
     lines += ["", f"Итого: {tot}/{len(rows)}; медиана {statistics.median(r['ms'] for r in rows) / 1000:.1f} с", "",
               "| № | Итог | мс | Детали |", "|---|---|---|---|"]
     lines += [f"| {r['id']} | {'да' if r['ok'] else 'нет'} | {r['ms']} | {r['why']} |" for r in rows]
+    lines += ["", "Время по шагам, сумма за вопрос (мс): медиана и сумма по прогону", "",
+              "| Шаг | Медиана | Сумма |", "|---|---|---|"]
+    for name in STAGES:
+        vals = [r["stages"].get(name, 0) for r in rows]
+        lines.append(f"| {name} | {int(statistics.median(vals))} | {sum(vals)} |")
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "softline_results.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
     (args.out / "softline_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

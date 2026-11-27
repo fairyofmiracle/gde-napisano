@@ -604,6 +604,19 @@ tbody tr:hover td { background: rgba(210, 220, 229, .04); }
 .step-ms { font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin-left: auto; }
 .step-detail { overflow-wrap: anywhere; }
 
+/* Ход работы: улики, сверка, вердикт */
+.inv-body { display: grid; gap: 12px; margin-top: 10px; }
+.inv-stage { display: grid; gap: 6px; }
+.inv-title { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; color: var(--text); }
+.inv-n { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.inv-list { list-style: none; margin: 0; padding: 0 0 0 18px; display: grid; gap: 6px; }
+.inv-ev { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.inv-tag { font-size: 12px; color: var(--muted); }
+.inv-conflict .inv-tag { color: var(--warn); }
+.inv-verdict { padding-left: 18px; display: grid; gap: 2px; }
+.inv-v-conflict .step-status, .inv-v-escalation .step-status, .inv-v-not_found .step-status { color: var(--warn); }
+.steps-raw { margin-top: 2px; }
+
 .answer-note { color: var(--muted); font-size: 14px; margin: 2px 0 10px; white-space: pre-line; }
 .warnings { margin: 10px 0 0; display: grid; gap: 6px; }
 .warning {
@@ -671,6 +684,9 @@ tbody tr:hover td { background: rgba(210, 220, 229, .04); }
 .conflict-flag { margin: 8px 0; padding: 6px 10px; border-left: 3px solid #d9a441; background: rgba(217, 164, 65, .10); font-size: .9rem; }
 
 .wiki-lead { margin: 0 0 14px; }
+.wiki-export { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; margin: 0 0 14px; font-size: 14px; }
+.button-link { display: inline-block; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); text-decoration: none; }
+.button-link:hover { border-color: var(--accent-hover); }
 .wiki-faq { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--border, var(--line, #d9d4ea)); border-radius: 12px; }
 .wiki-faq:target {
   background: rgba(217, 164, 65, .12);
@@ -693,3 +709,38 @@ tbody tr:hover td { background: rgba(210, 220, 229, .04); }
   .doc-layout { grid-template-columns: 1fr; }
   .doc-toc { position: static; max-height: none; margin-bottom: 8px; }
 }
+
+.simplify-row { margin-top: 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.simplify-note { margin: 0; }
+.gaps-lead { margin: 0 0 14px; }
+.gaps-exports { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 18px; }
+.gaps-item { margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--border, var(--line, #d9d4ea)); border-radius: 12px; }
+.gaps-item h3 { margin: 0 0 8px; font-size: 1.02rem; font-weight: 600; }
+.gaps-meta { margin: 0 0 6px; }
+.gaps-clauses, .gaps-sources { margin: 8px 0 0; padding-left: 18px; }
+.gaps-empty { margin: 0; }
+.gaps-scan { margin-top: 8px; }
+
+/* --- демо-ящик службы качества --- */
+.mail-demo { margin: 0 0 14px; padding: 8px 12px; border: 1px solid rgba(217, 164, 65, .3); border-radius: var(--radius-sm); color: var(--warn); font-size: 14px; }
+.mail-layout { display: grid; grid-template-columns: minmax(240px, 340px) 1fr; gap: 16px; align-items: start; }
+.mail-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; max-height: 70vh; overflow: auto; }
+.mail-item button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; gap: 2px; width: 100%; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid transparent; }
+.mail-item button:hover, .mail-item.active button { border-color: var(--border); }
+.mail-item button:focus-visible { outline: 2px solid var(--accent-hover); }
+.mail-item.unread .mail-subject { font-weight: 600; color: var(--text); }
+.mail-top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.mail-subject { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+.mail-meta { font-size: 12px; }
+.mail-view h3 { margin-top: 0; overflow-wrap: anywhere; }
+.mail-head { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; font-size: 13px; margin: 0 0 12px; }
+.mail-head dt { color: var(--muted); }
+.mail-head dd { margin: 0; overflow-wrap: anywhere; }
+.mail-found { display: grid; gap: 8px; padding-left: 18px; }
+.mail-raw pre { white-space: pre-wrap; font-size: 13px; }
+.mail-actions { margin-top: 14px; gap: 10px; }
+@media (max-width: 720px) { .mail-layout { grid-template-columns: 1fr; } }
+.esc-target td { background: rgba(217, 164, 65, .08); }
+
+/* подпункты нумерованных списков внутри пункта */
+.doc-clause.doc-sub { margin-left: 1.75em; }

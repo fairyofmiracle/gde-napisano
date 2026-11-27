@@ -35,10 +35,11 @@ function fill(node, ...children) {
       }
       const p = document.createElement("p");
       p.id = "p-" + c.point_id;
-      p.className = "doc-clause" + (c.point_id === target ? " hl" : "");
+      p.className = "doc-clause" + (c.label ? " doc-sub" : "") + (c.point_id === target ? " hl" : "");
+      if (c.label) p.title = "п. " + c.label;
       if (c.clause_no) {
         const b = document.createElement("b");
-        b.textContent = c.clause_no + " ";
+        b.textContent = (c.label ? c.clause_no + "." : c.clause_no) + " ";
         p.append(b);
       }
       p.append(document.createTextNode(c.text || ""));
@@ -47,7 +48,8 @@ function fill(node, ...children) {
         const a = document.createElement("a");
         a.href = "#p-" + c.point_id;
         a.className = "toc-clause";
-        a.textContent = (c.clause_no ? c.clause_no + " " : "") + String(c.text || "").slice(0, 72);
+        const shown = c.label || c.clause_no;
+        a.textContent = (shown ? shown + " " : "") + String(c.text || "").slice(0, 72);
         if ((c.text || "").length > 72) a.textContent = a.textContent.replace(/\s+\S*$/, "") + "…";
         toc.push(a);
       }

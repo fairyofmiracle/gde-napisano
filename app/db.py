@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS answers (
     llm_provider TEXT NOT NULL DEFAULT '',
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
-    latency_ms INTEGER NOT NULL DEFAULT 0
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    payload TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,6 +106,10 @@ CREATE TABLE IF NOT EXISTS escalations (
     faq_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS escalations_norm ON escalations(norm_question);
+CREATE TABLE IF NOT EXISTS mail_read (
+    esc_id INTEGER PRIMARY KEY,
+    read_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS faq (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -150,9 +155,14 @@ class Database:
             acols = {r["name"] for r in self.conn.execute("PRAGMA table_info(answers)")}
             for col, ddl in (("outcome", "TEXT NOT NULL DEFAULT ''"), ("division", "TEXT NOT NULL DEFAULT ''"),
                              ("session_id", "TEXT NOT NULL DEFAULT ''"), ("cited", "TEXT NOT NULL DEFAULT '[]'"),
-                             ("escalated", "INTEGER NOT NULL DEFAULT 0")):
+                             ("escalated", "INTEGER NOT NULL DEFAULT 0"),
+                             ("payload", "TEXT NOT NULL DEFAULT '{}'")):
                 if col not in acols:
                     self.conn.execute(f"ALTER TABLE answers ADD COLUMN {col} {ddl}")
+            ccols = {r["name"] for r in self.conn.execute("PRAGMA table_info(clauses)")}
+            if ccols and "label" not in ccols:
+                # метка для отображения (подпункты списков); на point_id не влияет
+                self.conn.execute("ALTER TABLE clauses ADD COLUMN label TEXT NOT NULL DEFAULT ''")
             cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(feedback)")}
             if "client" not in cols:
                 self.conn.execute("ALTER TABLE feedback ADD COLUMN client TEXT NOT NULL DEFAULT ''")
