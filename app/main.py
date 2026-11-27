@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import tempfile
 import threading
@@ -35,6 +36,8 @@ from app.schemas import (
     DeleteOut,
     DocumentOut,
     ErrorResponse,
+    EscalateIn,
+    ExpertAnswerIn,
     FeedbackIn,
     FeedbackOut,
     HealthOut,
@@ -236,6 +239,10 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     def index_page():
         return FileResponse(STATIC / "index.html")
 
+    @app.get("/doc/{doc_id}", include_in_schema=False)
+    def doc_page(doc_id: str):
+        return FileResponse(STATIC / "doc.html")
+
     @app.get("/admin", include_in_schema=False)
     def admin_page():
         return FileResponse(STATIC / "admin.html")
@@ -305,6 +312,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             "llm_ok": s.llm.healthy(), "clauses": n, "indexing": request.app.state.index_status["running"],
             "admin_enabled": bool(settings.admin_token), "demo_ui_only": settings.demo_ui_only,
             "telegram_url": f"https://t.me/{tg}" if tg else None,
+            "quality_email": settings.quality_email, "demo_user_email": settings.demo_user_email,
         }
 
     # --- публичное API -------------------------------------------------------------
@@ -329,7 +337,58 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         if not s.limiter.allow(client if not trusted else f"trusted:{client}", limit):
             raise HTTPException(429, "Слишком много вопросов подряд, подождите минуту",
                                 headers={"Retry-After": "60"})
-        return await run_in_threadpool(s.answers.ask, body.question, body.boxes)
+        return await run_in_threadpool(
+            lambda: s.assistant.ask(body.question, session_id=body.session_id or "", division=body.division,
+                                    boxes=body.boxes, user_email=body.user_email or "",
+                                    user_name=body.user_name or ""))
+
+    @app.post("/api/escalate", tags=["Чат и поиск"], summary="Передать вопрос в службу качества",
+              description="Сотрудник сам просит передать вопрос эксперту (например, после вариантов по "
+                          "подразделениям). Письмо уходит на QUALITY_EMAIL, сотрудник в копии.",
+              responses=error_responses(404, 422))
+    def escalate(body: EscalateIn, request: Request):
+        s: Services = svc(request)
+        _limit(s, request, "escalate", settings.practice_rate_limit_per_minute, "Слишком много запросов подряд")
+        ans = s.memory.get_answer(body.answer_id)
+        if ans is None:
+            raise HTTPException(404, "Ответ не найден")
+        sess = s.assistant.session(body.session_id or "")
+        cands = json.loads(ans["candidates"] or "[]")
+        found = []
+        for c in cands[:3]:
+            rows = s.db.query("SELECT text FROM clauses WHERE point_id=?", (c["point_id"],))
+            if rows:
+                from app.parsing import format_ref
+
+                found.append({"ref": format_ref(c["doc_title"], c["clause_no"]), "text": rows[0]["text"],
+                              "doc_id": c["doc_id"], "doc_title": c["doc_title"], "clause_no": c["clause_no"]})
+        div = sess.get("division") or ""
+        esc = s.escalations.create(ans["question"], "manual", found,
+                                   user_email=body.user_email or sess.get("user_email") or "",
+                                   user_name=sess.get("user_name") or "",
+                                   division=div if div in s.boxes.boxes else "",
+                                   division_name=s.boxes.name(div) if div in s.boxes.boxes else "",
+                                   answer_id=body.answer_id, session_id=body.session_id or "")
+        s.db.execute("UPDATE answers SET escalated=1 WHERE answer_id=?", (body.answer_id,))
+        return {"ok": True, "escalation": esc,
+                "text": f"Отправил запрос в службу качества ({esc['to']}), вы в копии ({esc['cc']})."}
+
+    @app.get("/api/documents/{doc_id}/clauses", tags=["Документы"], summary="Документ целиком по пунктам",
+             description="Все пункты документа по порядку: для перехода к месту в документе с подсветкой.",
+             responses=error_responses(404))
+    def document_clauses(doc_id: str, request: Request):
+        s: Services = svc(request)
+        f = s.db.query("SELECT doc_id, title, box, mtime FROM files WHERE doc_id=?", (doc_id,))
+        if not f:
+            raise HTTPException(404, "Документ не найден")
+        rows = s.db.query("SELECT point_id, clause_no, section, page, kind, text FROM clauses WHERE doc_id=? "
+                          "ORDER BY ord", (doc_id,))
+        from app.answer import doc_date
+
+        return {"doc_id": doc_id, "title": f[0]["title"], "box": f[0]["box"],
+                "box_name": s.boxes.name(f[0]["box"]) if f[0]["box"] else "",
+                "doc_date": doc_date(f[0]["mtime"]) if f[0]["mtime"] else None,
+                "clauses": [dict(r) for r in rows]}
 
     def _limit(s: Services, request: Request, bucket: str, per_minute: int, message: str) -> None:
         ip = client_ip(request)
@@ -542,6 +601,78 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         if cur.rowcount == 0:
             raise HTTPException(404, "Запись не найдена")
         return {"ok": True}
+
+    # --- служба качества: эскалации, ответы экспертов, разъяснения, аналитика ---------
+    @app.get("/api/operator/escalations", tags=["Служба качества", "Админ"], summary="Запросы в службу качества",
+             dependencies=admin, responses=ADMIN_ERRORS)
+    def escalations_list(request: Request, limit: int = Query(100, ge=1, le=500)):
+        return svc(request).escalations.list(limit)
+
+    @app.post("/api/operator/escalations/{esc_id}/answer", tags=["Служба качества", "Админ"],
+              summary="Ответ эксперта (имитация письма)",
+              description="Финальный ответ попадает в базу разъяснений и используется для таких же вопросов. "
+                          "Ответ со встречным вопросом (или final=false) только сохраняется.",
+              dependencies=admin, responses=error_responses(400, 401, 403, 404, 422))
+    def escalation_answer(esc_id: int, body: ExpertAnswerIn, request: Request):
+        from app.escalation import EscalationError
+
+        try:
+            return svc(request).escalations.answer(esc_id, body.text, expert=body.expert, final=body.final)
+        except KeyError:
+            raise HTTPException(404, "Запрос не найден") from None
+        except EscalationError as e:
+            raise HTTPException(400, str(e)) from None
+
+    @app.post("/api/operator/escalations/import-eml", tags=["Служба качества", "Админ"],
+              summary="Импорт письма-ответа эксперта (.eml)", dependencies=admin,
+              responses=error_responses(400, 401, 403, 404, 413))
+    async def escalation_import(request: Request, file: UploadFile = File(..., description="Письмо .eml")):
+        from app.escalation import EscalationError
+
+        raw = await file.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise HTTPException(413, "Письмо больше 2 МБ")
+        try:
+            return svc(request).escalations.import_eml(raw)
+        except KeyError:
+            raise HTTPException(404, "Запрос из письма не найден") from None
+        except EscalationError as e:
+            raise HTTPException(400, str(e)) from None
+
+    @app.post("/api/operator/mail/poll", tags=["Служба качества", "Админ"], summary="Проверить почту (IMAP)",
+              dependencies=admin, responses=error_responses(400, 401, 403))
+    def mail_poll(request: Request):
+        from app.escalation import EscalationError
+
+        try:
+            return svc(request).escalations.poll_imap()
+        except EscalationError as e:
+            raise HTTPException(400, str(e)) from None
+        except OSError:
+            raise HTTPException(400, "Почтовый сервер недоступен") from None
+
+    @app.get("/api/operator/outbox/{name}", tags=["Служба качества", "Админ"], summary="Письмо из исходящих (.eml)",
+             dependencies=admin, responses=error_responses(401, 403, 404))
+    def outbox_file(name: str, request: Request):
+        if not re.fullmatch(r"escalation-\d{5}-\d+\.eml", name):
+            raise HTTPException(404, "Письмо не найдено")
+        path = settings.outbox_dir / name
+        if not path.is_file():
+            raise HTTPException(404, "Письмо не найдено")
+        return FileResponse(path, media_type="message/rfc822", filename=name)
+
+    @app.get("/api/operator/faq", tags=["Служба качества", "Админ"], summary="База разъяснений",
+             dependencies=admin, responses=ADMIN_ERRORS)
+    def faq_list(request: Request):
+        return svc(request).faq.list()
+
+    @app.get("/api/admin/analytics", tags=["Служба качества", "Админ"], summary="Аналитика",
+             description="Неудачные поиски, эскалации, повторы, популярные документы и пункты, время ответа, "
+                         "стоимость запроса.", dependencies=admin, responses=ADMIN_ERRORS)
+    def analytics(request: Request):
+        from app import analytics as an
+
+        return an.build(svc(request).db, settings)
 
     return app
 

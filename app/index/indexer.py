@@ -97,6 +97,9 @@ class Indexer:
         first = rel_path.split("/", 1)[0] if "/" in rel_path else ""
         if first in self.boxes.boxes or first == GENERAL_BOX:
             return first
+        by_name = self.boxes.box_for_doc(rel_path, title)
+        if by_name:
+            return by_name
         sample = title + " " + " ".join(c.text for c in (clauses or [])[:15])
         return self.boxes.guess_box(sample)
 

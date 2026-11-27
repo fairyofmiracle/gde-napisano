@@ -67,7 +67,7 @@ def test_docs_redoc_openapi(services_factory):
         assert schema["info"]["version"]
         assert schema["info"]["description"]
         tag_names = {t["name"] for t in schema["tags"]}
-        assert tag_names == {"Служебное", "Чат и поиск", "Документы", "Ящички", "Отзывы", "Админ"}
+        assert tag_names == {"Служебное", "Чат и поиск", "Документы", "Ящички", "Отзывы", "Админ", "Служба качества"}
         schemes = schema["components"]["securitySchemes"]
         assert schemes["BearerAuth"]["scheme"] == "bearer"
         assert schemes["AdminToken"]["name"] == "X-Admin-Token"

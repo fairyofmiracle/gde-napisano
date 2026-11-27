@@ -16,6 +16,7 @@ OPENAPI_TAGS = [
     {"name": "Ящички", "description": "Направления документов: кадры, ИТ, финансы и другие."},
     {"name": "Отзывы", "description": "Оценки «да/нет» и кейсы из практики."},
     {"name": "Админ", "description": "Статистика, операторская и служебные действия. Нужен токен администратора."},
+    {"name": "Служба качества", "description": "Письма в службу качества, ответы экспертов, база разъяснений и аналитика."},
 ]
 
 API_DESCRIPTION = """
@@ -155,6 +156,8 @@ class StatusOut(_Model):
     clauses: int = Field(description="Сколько пунктов в индексе")
     indexing: bool = Field(description="Идёт ли сейчас индексация")
     admin_enabled: bool = Field(description="Задан ли токен администратора")
+    quality_email: str | None = Field(default=None, description="Адрес службы качества для эскалаций")
+    demo_user_email: str | None = Field(default=None, description="Почта сотрудника по умолчанию (имитация профиля)")
     demo_ui_only: bool
     telegram_url: str | None = Field(default=None, description="Ссылка на Telegram-бота, если задан TELEGRAM_BOT_USERNAME")
 
@@ -171,6 +174,13 @@ class ChatIn(_Model):
                           examples=["Сколько календарных дней ежегодного оплачиваемого отпуска?"])
     boxes: list[str] | None = Field(default=None, description="Ограничить поиск этими ящичками; иначе выбирает маршрутизатор",
                                     examples=[["hr"]])
+    session_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_.:\-]*$",
+                                   description="Идентификатор диалога: в нём запоминается подразделение сотрудника")
+    division: str | None = Field(default=None, max_length=32,
+                                 description="Подразделение сотрудника (box_id) или unknown — «не знаю, покажите все»")
+    user_email: str | None = Field(default=None, max_length=200, pattern=r"^$|^[^@\s]+@[^@\s]+\.[^@\s]+$",
+                                   description="Почта сотрудника для копии письма в службу качества (имитация профиля)")
+    user_name: str | None = Field(default=None, max_length=120, description="Имя сотрудника (имитация профиля)")
 
 
 class OwnerOut(_Model):
@@ -203,6 +213,7 @@ class CitationOut(_Model):
     auto_quote: bool | None = Field(default=None, description="true, если цитата взята из начала пункта")
     box: str | None = None
     doc_date: str | None = Field(default=None, description="Дата файла документа (ДД.ММ.ГГГГ)")
+    link: str | None = Field(default=None, description="Ссылка на место в документе с подсветкой пункта")
 
 
 class VariantOut(_Model):
@@ -218,6 +229,7 @@ class VariantOut(_Model):
     score: float = Field(description="Оценка реранкера от 0 до 1")
     practice: list[PracticeItem] = Field(default_factory=list)
     doc_date: str | None = Field(default=None, description="Дата файла документа (ДД.ММ.ГГГГ)")
+    link: str | None = Field(default=None, description="Ссылка на место в документе с подсветкой пункта")
 
 
 class TokensOut(_Model):
@@ -237,9 +249,11 @@ class AgentStepOut(_Model):
 class ChatOut(_Model):
     answer_id: str = Field(description="Идентификатор ответа, нужен для отзыва и практики")
     question: str
-    mode: Literal["confident", "uncertain", "not_found", "refused"] = Field(
-        description="confident — короткий ответ и цитата; uncertain — 2–3 варианта; not_found — в документах нет; "
-                    "refused — вопрос отклонён фильтром нецензурной лексики, поиск не выполнялся")
+    mode: Literal["confident", "uncertain", "not_found", "refused", "clarify", "by_division", "faq", "offtopic"] = Field(
+        description="confident — выжимка и ссылки на пункты; uncertain — 2–3 варианта; not_found — в документах нет; "
+                    "refused — вопрос отклонён фильтром нецензурной лексики; clarify — нужно уточнить подразделение; "
+                    "by_division — ответы отдельно по подразделениям; faq — разъяснение службы качества; "
+                    "offtopic — вопрос не о регламентах")
     text: str = Field(description="Текст ответа")
     score: float = Field(description="Оценка лучшего пункта от 0 до 1")
     boxes: list[BoxRef] = Field(description="Ящички, в которых искали")
@@ -265,6 +279,19 @@ class ChatOut(_Model):
                                                                    "документе, подозрительный текст в пункте")
     iterations: int = Field(default=0, description="Сколько раз агент переформулировал вопрос и искал заново")
     steps: list[AgentStepOut] = Field(default_factory=list, description="Ход работы агента по шагам")
+    outcome: str | None = Field(default=None, description="Итог для аналитики: answer, quote_only, uncertain, "
+                                                          "not_found, clarify, by_division, faq, offtopic, refused")
+    session_id: str | None = None
+    profile: dict | None = Field(default=None, description="Запомненное подразделение и почта сотрудника")
+    division: dict | None = Field(default=None, description="Подразделение, по регламентам которого дан ответ")
+    clarify: dict | None = Field(default=None, description="Уточняющий вопрос и варианты-кнопки")
+    sections: list[dict] = Field(default_factory=list, description="Ответы отдельно по подразделениям")
+    escalation: dict | None = Field(default=None, description="Письмо в службу качества: кому, копия, способ доставки")
+    faq: dict | None = Field(default=None, description="Разъяснение службы качества, из которого взят ответ")
+    glossary: list[dict] = Field(default_factory=list, description="Расшифровка сокращений из глоссария")
+    missing_docs: list[str] = Field(default_factory=list, description="Документы, на которые есть ссылка, но их нет в базе")
+    conflict: bool = Field(default=False, description="Пункты противоречат друг другу")
+    notice: str | None = Field(default=None, description="Пояснение над ответом (например, о передаче в службу качества)")
 
     model_config = ConfigDict(extra="ignore", json_schema_extra={"examples": [{
         "answer_id": "c0ffee00c0ffee00c0ffee00c0ffee00",
@@ -427,6 +454,18 @@ class InboxOut(_Model):
     not_found: list[InboxAnswerOut] = Field(description="Вопросы, на которые в документах не нашлось ответа")
     negative_feedback: list[InboxFeedbackOut] = Field(description="Отрицательные оценки")
     practice: list[InboxPracticeOut] = Field(description="Кейсы практики, в том числе на модерации")
+
+
+class ExpertAnswerIn(_Model):
+    text: str = Field(min_length=2, max_length=8000, description="Ответ эксперта службы качества")
+    expert: str = Field(default="", max_length=200, description="Кто ответил (почта или ФИО)")
+    final: bool | None = Field(default=None, description="true — финальный ответ; пусто — определить по тексту")
+
+
+class EscalateIn(_Model):
+    answer_id: str = Field(min_length=8, max_length=64, description="Ответ, по которому сотрудник просит помощи")
+    session_id: str | None = Field(default=None, max_length=64)
+    user_email: str | None = Field(default=None, max_length=200, pattern=r"^$|^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 # чтобы error_responses мог сослаться на ReadyOut, объявление выше уже есть

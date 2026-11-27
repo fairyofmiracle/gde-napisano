@@ -73,20 +73,26 @@ class Searcher:
         # Реранкер тяжёлый (секунды на CPU): параллельные реранки только замедляют друг друга
         self._rerank_slots = threading.BoundedSemaphore(max(1, getattr(settings, "llm_max_concurrency", 2)))
 
-    def search(self, question: str, boxes: list[str] | None = None) -> SearchResult:
+    def search(self, question: str, boxes: list[str] | None = None, strict: bool = False,
+               route: bool = True) -> SearchResult:
+        """strict=True — искать только в заданных ящичках (подразделение выбрано), без расширения на все;
+        route=False — не угадывать направление, искать по всем документам."""
         stats = {"vector": 0, "bm25": 0, "fused": 0, "reranked": 0, "memory_adjusted": 0,
                  "retrieve_ms": 0, "rerank_ms": 0, "route_ms": 0}
         q_vec = self.embedder.embed_queries([question])[0]
         t = time.perf_counter()
+        use_router = route
         if boxes:
             route = Route([b for b in boxes if b in self.boxes.boxes], {}, "manual")
+        elif not use_router:
+            route = Route([], {}, "none")
         else:
             route = self.boxes.route(question, q_vec, self.embedder, self.settings, self.llm)
         stats["route_ms"] = int((time.perf_counter() - t) * 1000)
         adjustments = self.memory.adjustments(q_vec)
         cands = self._retrieve(question, q_vec, route.boxes, adjustments, stats)
         searched_all = not route.boxes
-        if route.boxes and (not cands or cands[0].score < self.settings.box_fallback_threshold):
+        if route.boxes and not strict and (not cands or cands[0].score < self.settings.box_fallback_threshold):
             more = self._retrieve(question, q_vec, None, adjustments, stats)
             by_id = {c.point_id: c for c in cands}
             for c in more:

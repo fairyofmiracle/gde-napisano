@@ -171,7 +171,8 @@ class AnswerService:
         return d
 
     # --- агент ---------------------------------------------------------------------------
-    def ask(self, question: str, boxes: list[str] | None = None) -> dict:
+    def ask(self, question: str, boxes: list[str] | None = None, *, strict: bool = False,
+            search_query: str | None = None, record: bool = True, route: bool = True, pre=None) -> dict:
         """Шаги агента: проверка вопроса → маршрут → поиск → реранк → оценка уверенности →
         (если мало уверенности) переформулировка и повторный поиск → ответ модели →
         проверка цитаты и чисел → решение: ответ, уточнение (варианты) или «в документах нет»."""
@@ -185,7 +186,8 @@ class AnswerService:
         trace.add("guard", "Проверка вопроса", "ok", "Фильтр лексики пройден")
 
         t = time.perf_counter()
-        res = self.searcher.search(question, boxes)
+        res = pre if pre is not None else self.searcher.search(search_query or question, boxes, strict=strict,
+                                                               route=route)
         self._trace_search(trace, res, t)
         cands = self._distinct(res.candidates)
         mode, top, ambiguous_with = self._assess(cands)
@@ -210,7 +212,7 @@ class AnswerService:
             before = top
             for q in queries:
                 tried.add(normalize(q))
-                extra = self.searcher.search(q, boxes or res.route.boxes or None)
+                extra = self.searcher.search(q, boxes or res.route.boxes or None, strict=strict, route=route)
                 cands = self._merge(cands, extra.candidates)
             mode, top, ambiguous_with = self._assess(cands)
             better = top > before + 1e-6
@@ -233,7 +235,7 @@ class AnswerService:
         provider = self.llm.provider if any(rewrite_tokens) else ""
 
         if mode == CONFIDENT:
-            ctx = [c for c in cands[:3] if c.score >= max(s.uncertain_threshold, top * 0.5)]
+            ctx = [c for c in cands[:4] if c.score >= max(s.uncertain_threshold, top * 0.5)]
             suspicious = [i + 1 for i, c in enumerate(ctx) if looks_like_injection(c.text)]
             if suspicious:
                 trace.add("injection", "Проверка текста пунктов", "warn",
@@ -303,9 +305,21 @@ class AnswerService:
                         out["answer_kind"] = "answer"
                         out["practice"] = self.memory.practice_for(main.doc_id, main.clause_no)
                         out["owner"] = self._owner(main.box, question)
+                    if data.get("conflict"):
+                        out["conflict"] = True
+                        trace.add("conflict", "Проверка противоречий", "warn",
+                                  "Модель отметила, что пункты противоречат друг другу")
                     if "injection" in (data.get("flags") or []):
                         out["warnings"].append("В тексте документа были фразы, похожие на команды. "
                                                "Они проигнорированы, ответ построен только по существу пункта.")
+                elif (data is not None and not data.get("answerable") and top >= s.quote_fallback_score
+                      and ambiguous_with is None):
+                    # реранкер уверен в первом пункте, а модель не справилась: отдаём пункт дословно со ссылкой
+                    trace.add("verify_quote", "Проверка цитаты", "warn",
+                              f"Модель не сформулировала ответ, но пункт оценён на {top:.2f}: показываю его дословно")
+                    out["quote_check"] = "reranker_fallback"
+                    self._quote_only(out, ctx[0], question, "Модель не смогла сформулировать краткий ответ, "
+                                     "поэтому показываю дословно пункт, который лучше всего подходит к вопросу.")
                 else:
                     out["quote_check"] = "failed" if data and data.get("answerable") else "no_answer"
                     trace.add("verify_quote", "Проверка цитаты", "fail",
@@ -350,6 +364,9 @@ class AnswerService:
         out["tokens"] = {"prompt": prompt_tokens, "completion": completion_tokens}
         out["steps"] = trace.steps
         self._attach_dates(out)
+        out["_candidates"] = cands
+        if not record:
+            return out
         self.memory.record_answer(
             answer_id, question, res.q_vec, res.route.boxes, mode, top,
             [{"point_id": c.point_id, "doc_id": c.doc_id, "doc_title": c.doc_title, "clause_no": c.clause_no,

@@ -631,3 +631,27 @@ tbody tr:hover td { background: rgba(210, 220, 229, .04); }
   *, *::before, *::after { transition: none !important; }
   html { scroll-behavior: auto; }
 }
+
+/* --- диалог: источники, уточнение, подразделения, служба качества --- */
+.sources { margin-top: 12px; display: grid; gap: 10px; }
+.sources-title { font-weight: 600; font-size: 14px; }
+.source-item { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start; }
+.source-n { font-weight: 600; color: var(--accent, #6b4eff); }
+.source-item .quote { margin: 4px 0 0; font-size: 14px; }
+.clarify { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.division-section { border-left: 3px solid var(--line, #d9d4ea); padding: 6px 0 6px 12px; margin-top: 12px; }
+.division-section h4 { margin: 0 0 6px; font-size: 15px; }
+.division-section.mode-not_found { opacity: .85; }
+.division-line { font-size: 13px; margin: 4px 0 8px; }
+.escalation { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 196, 0, .12); font-size: 14px; }
+.glossary { margin-top: 10px; font-size: 13px; color: var(--muted, #6b6880); }
+.glossary abbr { text-decoration: none; font-weight: 600; }
+.faq-meta { margin-top: 8px; font-size: 13px; }
+.doc-body { margin-top: 12px; }
+.doc-clause { padding: 6px 10px; border-radius: 8px; line-height: 1.5; }
+.doc-clause.hl { background: rgba(255, 214, 0, .35); outline: 2px solid rgba(255, 190, 0, .6); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0 16px; }
+.kpi { border: 1px solid var(--line, #e3e0ee); border-radius: 10px; padding: 10px 12px; }
+.kpi b { display: block; font-size: 22px; }
+.answer-form { display: grid; gap: 6px; margin-top: 6px; }
+.answer-form textarea { width: 100%; min-height: 60px; }

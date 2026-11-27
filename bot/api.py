@@ -18,9 +18,14 @@ class DocagentClient:
     def __init__(self, base_url: str, timeout: float = 180.0, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._http = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout, transport=transport)
 
-    async def ask(self, question: str) -> dict:
+    async def ask(self, question: str, session_id: str | None = None, division: str | None = None) -> dict:
+        body: dict = {"question": question}
+        if session_id:
+            body["session_id"] = session_id
+        if division:
+            body["division"] = division
         try:
-            r = await self._http.post("/api/chat", json={"question": question})
+            r = await self._http.post("/api/chat", json=body)
         except httpx.HTTPError as e:
             raise ApiError(f"Приложение недоступно: {type(e).__name__}") from e
         if r.status_code == 429:

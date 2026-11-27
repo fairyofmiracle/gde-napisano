@@ -40,6 +40,9 @@ class Box:
     owners: list[Owner] = field(default_factory=list)
     description: str = ""
     stems: set[str] = field(default_factory=set)
+    # Регулярные выражения: по имени файла документа (doc_patterns) и по упоминанию в вопросе (aliases)
+    doc_patterns: list[re.Pattern] = field(default_factory=list)
+    aliases: list[re.Pattern] = field(default_factory=list)
 
 
 @dataclass
@@ -83,6 +86,14 @@ class BoxDirectory:
                     topic_stems=set(tokens(topics)),
                 )
                 box.owners.append(owner)
+                for col, target in (("doc_patterns", box.doc_patterns), ("aliases", box.aliases)):
+                    for pat in (row.get(col) or "").split("|"):
+                        pat = pat.strip()
+                        if pat and pat not in [x.pattern for x in target]:
+                            try:
+                                target.append(re.compile(pat, re.I))
+                            except re.error:
+                                log.warning("Ящичек %s: неверное выражение в %s: %s", bid, col, pat)
                 box.stems |= owner.topic_stems | set(tokens(box.name)) | set(tokens(row.get("typical_docs") or ""))
                 box.description += f" {topics}; {row.get('typical_docs') or ''}"
         for b in boxes.values():
@@ -91,6 +102,23 @@ class BoxDirectory:
 
     def ids(self) -> list[str]:
         return list(self.boxes)
+
+    def box_for_doc(self, rel_path: str, title: str = "") -> str | None:
+        """Ящичек по имени файла или заголовку документа (столбец doc_patterns)."""
+        name = f"{rel_path} {title}".replace("_", " ")
+        for bid, box in self.boxes.items():
+            if any(p.search(name) for p in box.doc_patterns):
+                return bid
+        return None
+
+    def mentioned(self, text: str) -> list[str]:
+        """Ящички, явно названные в тексте вопроса (столбец aliases), в порядке упоминания."""
+        hits = []
+        for bid, box in self.boxes.items():
+            pos = [m.start() for p in box.aliases for m in [p.search(text or "")] if m]
+            if pos:
+                hits.append((min(pos), bid))
+        return [b for _, b in sorted(hits)]
 
     def name(self, box_id: str) -> str:
         if box_id == GENERAL_BOX:

@@ -17,7 +17,8 @@ from bot.transcribe import Transcriber
 
 log = logging.getLogger(__name__)
 
-Reply = Callable[[str], Awaitable[None]]
+# reply(text) или reply(text, buttons) — кнопки: список (подпись, callback_data)
+Reply = Callable[..., Awaitable[None]]
 Download = Callable[[Path], Awaitable[None]]
 
 HELP = ("Я бот «Где написано?». Задайте вопрос по регламентам текстом или голосовым сообщением. Отвечу по "
@@ -42,6 +43,7 @@ class BotService:
         self._stt_lock = asyncio.Lock()  # распознавание по одному: процессор общий с поиском
         self._voice_pending = 0
         self.last_used = time.monotonic()
+        self._pending: dict[int, str] = {}  # вопрос, по которому ждём выбор подразделения
 
     def welcome(self) -> str:
         text = HELP
@@ -72,7 +74,7 @@ class BotService:
             return await reply(MSG_DENIED)
         if not self.limiter.allow(user_id):
             return await reply(MSG_BUSY)
-        await self._answer(text, reply)
+        await self._answer(text, reply, user_id)
 
     async def handle_voice(self, user_id: int, duration: int | None, file_size: int | None,
                            download: Download, reply: Reply) -> None:
@@ -94,11 +96,11 @@ class BotService:
             return await reply(MSG_VOICE_BUSY)
         self._voice_pending += 1
         try:
-            await self._handle_voice(download, reply)
+            await self._handle_voice(download, reply, user_id)
         finally:
             self._voice_pending -= 1
 
-    async def _handle_voice(self, download: Download, reply: Reply) -> None:
+    async def _handle_voice(self, download: Download, reply: Reply, user_id: int = 0) -> None:
         s = self.settings
         with tempfile.TemporaryDirectory(prefix="voice_") as tmp:
             src, wav = Path(tmp) / "in.bin", Path(tmp) / "out.wav"
@@ -128,23 +130,41 @@ class BotService:
         if not text:
             return await reply("Речь не разобрана. Скажите ещё раз поближе к микрофону или напишите текстом.")
         await reply(f"Распознано: «{text}»")
-        await self._answer(text, reply)
+        await self._answer(text, reply, user_id)
 
-    async def _answer(self, question: str, reply: Reply) -> None:
+    async def _answer(self, question: str, reply: Reply, user_id: int = 0, division: str | None = None) -> None:
         question = question.strip()
         if len(question) < 2:
             return await reply(MSG_SHORT)
         if len(question) > 2000:
             return await reply(MSG_LONG)
         try:
-            data = await self.api.ask(question)
+            data = await self.api.ask(question, session_id=f"tg-{user_id}" if user_id else None, division=division)
         except RateLimited as e:
             return await reply(f"Слишком много вопросов подряд, подождите {e.retry_after} с.")
         except ApiError as e:
             log.error("docagent: %s", e)
             return await reply(MSG_APP_DOWN)
-        for part in split_message(format_answer(data)):
+        parts = split_message(format_answer(data, self.settings.web_public_url))
+        if data.get("mode") == "clarify" and data.get("clarify"):
+            self._pending[user_id] = data["clarify"].get("pending_question") or question
+            buttons = [(o["label"], f"div:{o['id']}") for o in data["clarify"].get("options") or []]
+            for part in parts[:-1]:
+                await reply(part)
+            return await reply(parts[-1] if parts else "В каком вы подразделении?", buttons)
+        for part in parts:
             await reply(part)
+
+    async def handle_division(self, user_id: int, division: str, reply: Reply) -> None:
+        """Нажата кнопка подразделения: отвечаем на отложенный вопрос по его регламенту."""
+        if not self.allowed(user_id):
+            return await reply(MSG_DENIED)
+        question = self._pending.pop(user_id, None)
+        if not question:
+            return await reply("Вопрос уже неактуален. Задайте его ещё раз.")
+        if not self.limiter.allow(user_id):
+            return await reply(MSG_BUSY)
+        await self._answer(question, reply, user_id, division=division[:32])
 
     async def unload_if_idle(self, now: float | None = None) -> bool:
         """Выгружает модель, если голосовых давно не было. Возвращает True, если выгрузила."""

@@ -73,6 +73,63 @@ CREATE TABLE IF NOT EXISTS practice (
     text TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'new'
 );
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    division TEXT NOT NULL DEFAULT '',
+    clarify_count INTEGER NOT NULL DEFAULT 0,
+    pending_question TEXT NOT NULL DEFAULT '',
+    user_email TEXT NOT NULL DEFAULT '',
+    user_name TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS escalations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    answer_id TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL DEFAULT '',
+    question TEXT NOT NULL,
+    norm_question TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL,
+    division TEXT NOT NULL DEFAULT '',
+    found TEXT NOT NULL DEFAULT '[]',
+    user_email TEXT NOT NULL DEFAULT '',
+    user_name TEXT NOT NULL DEFAULT '',
+    to_email TEXT NOT NULL DEFAULT '',
+    message_id TEXT NOT NULL DEFAULT '',
+    delivery TEXT NOT NULL DEFAULT 'outbox',
+    eml_path TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    expert_answer TEXT NOT NULL DEFAULT '',
+    expert_from TEXT NOT NULL DEFAULT '',
+    answered_at TEXT,
+    faq_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS escalations_norm ON escalations(norm_question);
+CREATE TABLE IF NOT EXISTS faq (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    q_vec BLOB,
+    doc_id TEXT NOT NULL DEFAULT '',
+    doc_title TEXT NOT NULL DEFAULT '',
+    clause_no TEXT NOT NULL DEFAULT '',
+    division TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'expert',
+    expert TEXT NOT NULL DEFAULT '',
+    escalation_id INTEGER,
+    hits INTEGER NOT NULL DEFAULT 0,
+    last_hit_at TEXT,
+    active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL DEFAULT (datetime('now')),
+    kind TEXT NOT NULL,
+    answer_id TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -90,6 +147,12 @@ class Database:
     def _migrate(self) -> None:
         """Мягкие миграции для баз, созданных прежними версиями."""
         with self._lock:
+            acols = {r["name"] for r in self.conn.execute("PRAGMA table_info(answers)")}
+            for col, ddl in (("outcome", "TEXT NOT NULL DEFAULT ''"), ("division", "TEXT NOT NULL DEFAULT ''"),
+                             ("session_id", "TEXT NOT NULL DEFAULT ''"), ("cited", "TEXT NOT NULL DEFAULT '[]'"),
+                             ("escalated", "INTEGER NOT NULL DEFAULT 0")):
+                if col not in acols:
+                    self.conn.execute(f"ALTER TABLE answers ADD COLUMN {col} {ddl}")
             cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(feedback)")}
             if "client" not in cols:
                 self.conn.execute("ALTER TABLE feedback ADD COLUMN client TEXT NOT NULL DEFAULT ''")

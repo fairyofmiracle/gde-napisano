@@ -102,6 +102,13 @@ class Settings(BaseSettings):
     gigachat_timeout: float = 60.0
     llm_retries: int = 2  # повторы при сетевых ошибках, 429 и 5xx
     llm_retry_backoff: float = 1.0  # секунды, удваивается с каждой попыткой
+    # Предохранитель: после стольких сбоев подряд модель считается недоступной на llm_breaker_cooldown секунд
+    # (0 = выключен). Пока он открыт, запросы не ждут таймаутов, а отвечают цитатой пункта.
+    llm_breaker_failures: int = 2
+    llm_breaker_cooldown: float = 60.0
+    # Если лучший пункт оценён реранкером не ниже этого значения, а модель ответила «ответа нет»,
+    # показываем пункт дословно со ссылкой, а не уходим в «нет в документах» (1.01 = выключено)
+    quote_fallback_score: float = 0.95
     llm_max_concurrency: int = 2  # одновременных запросов к модели на процесс
 
     # OCR и форматы
@@ -130,6 +137,49 @@ class Settings(BaseSettings):
     admin_max_failures: int = 5
     admin_lockout_seconds: int = 300
 
+    # Глоссарий сокращений (TSV: сокращение<TAB>расшифровка). Нет файла = без расширения запроса.
+    glossary_tsv: Path = Path("./data/glossary.tsv")
+
+    # Служба качества и имитация профиля сотрудника (для письма-эскалации: сотрудник в копии)
+    quality_email: str = "quality-test@example.local"
+    demo_user_email: str = "employee-test@example.local"
+    demo_user_name: str = "Тестовый сотрудник"
+    # Ссылка на веб-интерфейс для писем (пусто = без ссылки)
+    web_public_url: str = ""
+    # SMTP для писем в службу качества. Пусто = письма складываются в DATA_DIR/outbox как .eml
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = Field(default="", repr=False)
+    smtp_from: str = "gde-napisano@example.local"
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    smtp_timeout: float = 15.0
+    # IMAP для чтения ответов экспертов (пусто = только импорт .eml и форма в операторской)
+    imap_host: str = ""
+    imap_port: int = 993
+    imap_user: str = ""
+    imap_password: str = Field(default="", repr=False)
+    imap_folder: str = "INBOX"
+    # Эскалация при недостаточной уверенности (варианты без подтверждённого ответа)
+    escalate_on_uncertain: bool = True
+
+    # Разъяснения службы качества (FAQ): порог похожести вопроса и минимальная доля общих слов
+    faq_similarity: float = 0.93
+    faq_similarity_soft: float = 0.85
+    faq_min_overlap: float = 0.4
+    # Сколько повторов одного вопроса — сигнал «пересмотреть регламент»
+    review_repeat_threshold: int = 3
+
+    # Уточнение подразделения: максимум уточнений за сессию и порог «ответы расходятся»
+    clarify_max: int = 2
+    clarify_ratio: float = 0.6
+
+    # Стоимость запроса (для аналитики): цена 1000 токенов облачной модели, руб.,
+    # и стоимость часа стенда с локальной моделью, руб.
+    llm_price_per_1k_tokens: float = 0.0
+    stand_cost_per_hour: float = 0.0
+
     index_on_start: bool = True
     # Прогрев моделей при старте (в фоне); /ready отвечает 503, пока прогрев не закончен
     warmup_on_start: bool = True
@@ -153,6 +203,10 @@ class Settings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return self.data_dir / "docagent.sqlite3"
+
+    @property
+    def outbox_dir(self) -> Path:
+        return self.data_dir / "outbox"
 
     @property
     def allowed_upload_ext_set(self) -> set[str]:

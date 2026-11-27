@@ -18,7 +18,7 @@ log = logging.getLogger("bot")
 def build_dispatcher(service: BotService):
     from aiogram import Bot, Dispatcher, F, Router
     from aiogram.filters import Command, CommandStart
-    from aiogram.types import Message
+    from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
     router = Router()
 
@@ -30,9 +30,24 @@ def build_dispatcher(service: BotService):
     router.message.filter(from_allowed_chat)
 
     def replier(message: Message):
-        async def reply(text: str) -> None:
-            await message.answer(text)
+        async def reply(text: str, buttons: list[tuple[str, str]] | None = None) -> None:
+            markup = None
+            if buttons:
+                markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=d)]
+                                                               for t, d in buttons])
+            await message.answer(text, reply_markup=markup)
         return reply
+
+    @router.callback_query(F.data.startswith("div:"))
+    async def pick_division(cb: CallbackQuery) -> None:
+        msg = cb.message
+        user_id = cb.from_user.id if cb.from_user else 0
+        await cb.answer()
+        if msg is None or not service.chat_allowed(msg.chat.type, msg.chat.id, bool(cb.from_user and cb.from_user.is_bot)):
+            return
+        with contextlib.suppress(Exception):
+            await msg.edit_reply_markup(reply_markup=None)
+        await service.handle_division(user_id, (cb.data or "")[4:], replier(msg))
 
     @router.message(CommandStart())
     @router.message(Command("help"))
@@ -83,7 +98,7 @@ async def run(settings: BotSettings) -> None:
     watcher = asyncio.create_task(_idle_watcher(service))
     try:
         log.info("бот запущен, распознавание: %s", settings.transcriber)
-        await build_dispatcher(service).start_polling(bot, allowed_updates=["message"])
+        await build_dispatcher(service).start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
         watcher.cancel()
         await api.close()

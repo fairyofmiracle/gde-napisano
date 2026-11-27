@@ -671,3 +671,55 @@ def test_voice_queue_is_bounded():
     svc._voice_pending = 1  # одно голосовое уже распознаётся
     asyncio.run(svc.handle_voice(8, 5, 1000, downloader(1), reply))
     assert out == ["Сейчас распознаётся много голосовых. Подождите минуту или напишите вопрос текстом."]
+
+
+# ---------- уточнение подразделения кнопками ----------
+
+class _ClarifyApi:
+    def __init__(self):
+        self.calls = []
+
+    async def ask(self, question, session_id=None, division=None):
+        self.calls.append((question, session_id, division))
+        if division is None:
+            return {"mode": "clarify", "text": "Ответ зависит от подразделения. В каком вы подразделении?",
+                    "clarify": {"pending_question": question,
+                                "options": [{"id": "dbrct", "label": "ДБРЦТ"}, {"id": "unknown", "label": "Не знаю"}]}}
+        return {"mode": "confident", "text": "Не менее чем за 3 рабочих дня [1].",
+                "citations": [{"n": 1, "ref": "Проектная деятельность ДБРЦТ, п. 1.5", "quote": "не менее чем за 3",
+                               "link": "/doc/x?p=y"}],
+                "escalation": None, "glossary": [{"abbr": "РП", "full": "Руководитель проекта"}]}
+
+
+def test_bot_clarify_buttons_and_division_answer():
+    from bot.service import BotService
+    from bot.settings import BotSettings
+
+    api = _ClarifyApi()
+    svc = BotService(BotSettings(_env_file=None, telegram_open=True, web_public_url="https://bot.example.local"), api, None)
+    out = []
+
+    async def reply(text, buttons=None):
+        out.append((text, buttons))
+
+    asyncio.run(svc.handle_text(7, "За сколько инициировать заявку?", reply))
+    assert out[-1][1] == [("ДБРЦТ", "div:dbrct"), ("Не знаю", "div:unknown")]
+    assert api.calls[-1][1] == "tg-7"
+    asyncio.run(svc.handle_division(7, "dbrct", reply))
+    assert api.calls[-1] == ("За сколько инициировать заявку?", "tg-7", "dbrct")
+    text = out[-1][0]
+    assert "3 рабочих дня" in text and "https://bot.example.local/doc/x?p=y" in text and "РП — Руководитель проекта" in text
+    asyncio.run(svc.handle_division(7, "dbrct", reply))
+    assert "неактуален" in out[-1][0]
+
+
+def test_bot_formats_escalation_and_faq():
+    from bot.formatting import format_answer
+
+    t = format_answer({"mode": "not_found", "text": "Не смог ответить по регламентам, отправил запрос.",
+                       "escalation": {"id": 3, "to": "q@example.local", "cc": "u@example.local", "delivery": "outbox"}})
+    assert "ГН-3" in t and "копия u@example.local" in t
+    f = format_answer({"mode": "faq", "text": "700 рублей.", "faq": {"label": "Разъяснение службы качества",
+                                                                     "created_at": "2026-11-26 20:00:00"}})
+    assert "Разъяснение службы качества" in f
+    assert format_answer({"mode": "offtopic", "text": "Обратитесь к руководителю."}) == "Обратитесь к руководителю."

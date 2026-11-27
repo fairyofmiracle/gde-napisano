@@ -3,6 +3,14 @@ const chat = document.getElementById("chat");
 const form = document.getElementById("ask");
 const q = document.getElementById("q");
 const boxSel = document.getElementById("box");
+// Диалог: идентификатор сессии (в ней запоминается подразделение) и выбор подразделения
+const SESSION_KEY = "gnSession";
+let sessionId = localStorage.getItem(SESSION_KEY);
+if (!sessionId) {
+  sessionId = "web-" + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+  localStorage.setItem(SESSION_KEY, sessionId);
+}
+let pendingDivision = null;
 
 function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
@@ -71,6 +79,7 @@ function renderChips() {
       "data-box": opt.value,
       onclick: () => {
         boxSel.value = opt.value;
+        pendingDivision = opt.value || "auto";
         wrap.querySelectorAll(".chip").forEach(c => c.classList.toggle("is-on", c.getAttribute("data-box") === opt.value));
       },
     }, opt.textContent)
@@ -119,10 +128,14 @@ function practiceForm(answerId, pointId, container, prompt) {
 
 function modePlaque(mode) {
   const map = {
-    confident: { class: "plaque plaque-ok", text: "Уверенный ответ" },
+    confident: { class: "plaque plaque-ok", text: "Ответ по регламенту" },
     uncertain: { class: "plaque plaque-warn", text: "Варианты" },
     not_found: { class: "plaque plaque-muted", text: "Нет в документах" },
     refused: { class: "plaque plaque-muted", text: "Вопрос отклонён" },
+    clarify: { class: "plaque plaque-warn", text: "Уточнение" },
+    by_division: { class: "plaque plaque-warn", text: "По подразделениям" },
+    faq: { class: "plaque plaque-ok", text: "Разъяснение службы качества" },
+    offtopic: { class: "plaque plaque-muted", text: "Вне базы регламентов" },
   };
   const m = map[mode] || map.not_found;
   return el("div", { class: m.class }, m.text);
@@ -134,7 +147,69 @@ function sourceLine(c) {
     c.clause_no ? el("span", {}, "п. " + c.clause_no) : null,
     c.page ? el("span", {}, "с. " + c.page) : null,
     c.doc_date ? el("span", { class: "muted" }, "файл от " + c.doc_date) : null,
-    el("a", { href: "#", class: "ref", onclick: (e) => { e.preventDefault(); openClause(c.point_id); } }, "открыть пункт"));
+    c.link ? el("a", { href: c.link, class: "ref", target: "_blank", rel: "noopener" }, "открыть в документе") : null,
+    el("a", { href: "#", class: "ref", onclick: (e) => { e.preventDefault(); openClause(c.point_id); } }, "показать пункт"));
+}
+
+function citationsBlock(citations) {
+  if (!citations || !citations.length) return null;
+  return el("div", { class: "sources" }, el("div", { class: "sources-title" }, "Где написано:"),
+    citations.map(c => el("div", { class: "source-item" },
+      el("span", { class: "source-n" }, `[${c.n}]`),
+      el("div", {}, sourceLine(c), c.quote ? el("blockquote", { class: "quote" }, `«${c.quote}»`) : null))));
+}
+
+function glossaryBlock(items) {
+  if (!items || !items.length) return null;
+  return el("div", { class: "glossary" }, el("b", {}, "Сокращения: "),
+    items.map((g, i) => [i ? "; " : "", el("abbr", { title: g.full }, g.abbr), " — ", g.full]));
+}
+
+function escalationBlock(esc) {
+  if (!esc) return null;
+  const how = esc.delivery === "smtp" ? "письмо отправлено" : "письмо сохранено в исходящих (почта не настроена)";
+  return el("div", { class: "escalation" },
+    el("b", {}, `Запрос в службу качества ГН-${esc.id}`),
+    el("div", {}, `Кому: ${esc.to} · копия: ${esc.cc} · ${how}` + (esc.duplicate ? " · уже передан ранее" : "")));
+}
+
+function escalateButton(ans, container) {
+  const btn = el("button", { type: "button", class: "none", onclick: async () => {
+    btn.disabled = true;
+    try {
+      const r = await api("/api/escalate", { answer_id: ans.answer_id, session_id: sessionId });
+      btn.replaceWith(el("div", { class: "answer-note" }, r.text), escalationBlock(r.escalation));
+    } catch (err) { btn.disabled = false; alert(err.message); }
+  } }, "Передать вопрос в службу качества");
+  container.append(btn);
+}
+
+function clarifyBlock(ans) {
+  const c = ans.clarify;
+  const row = el("div", { class: "clarify" });
+  c.options.forEach(o => row.append(el("button", { type: "button", class: o.id === "unknown" ? "none" : "pick", onclick: () => {
+    row.querySelectorAll("button").forEach(b => b.disabled = true);
+    ask(c.pending_question, o.id, o.label);
+  } }, o.label)));
+  return row;
+}
+
+function sectionBlock(sec) {
+  const box = el("div", { class: `division-section mode-${sec.mode}` }, el("h4", {}, sec.division_name));
+  if (sec.mode === "confident") {
+    box.append(textWithRefs(sec.text, sec.citations));
+    const cb = citationsBlock(sec.citations); if (cb) box.append(cb);
+    if (sec.advice) box.append(el("div", { class: "advice" }, el("b", {}, "Что сделать: "), sec.advice));
+  } else if (sec.mode === "uncertain") {
+    box.append(el("div", { class: "answer-note" }, "Однозначного пункта нет, ближайшие по смыслу:"));
+    sec.variants.forEach(v => box.append(el("div", { class: "variant" },
+      el("div", { class: "cite" }, v.link ? el("a", { href: v.link, target: "_blank", rel: "noopener" }, v.ref) : v.ref),
+      el("div", { class: "snippet" }, v.text.length > 300 ? v.text.slice(0, 300) + "…" : v.text))));
+  } else {
+    box.append(el("div", { class: "answer-note" }, "В регламенте этого подразделения ответа нет."));
+  }
+  const w = warningsBlock(sec.warnings); if (w) box.append(w);
+  return box;
 }
 
 function feedbackRow(ans, container) {
@@ -213,35 +288,51 @@ function warningsBlock(items) {
 function renderAnswer(ans) {
   const box = el("div", { class: `msg bot mode-${ans.mode}` });
   box.append(modePlaque(ans.mode));
+  if (ans.division && ans.division.name && ans.mode !== "by_division") box.append(el("div", { class: "muted division-line" }, "По регламенту: " + ans.division.name));
   if (ans.mode === "confident") {
+    if (ans.notice) box.append(el("div", { class: "answer-note" }, ans.notice));
     if (ans.answer_kind === "quote_only") box.append(el("div", { class: "answer-note" }, ans.text));
-    for (const c of ans.citations) {
-      box.append(el("blockquote", { class: "quote" }, `«${c.quote}»`));
-      box.append(sourceLine(c));
-    }
-    if (ans.answer_kind !== "quote_only") box.append(textWithRefs(ans.text, ans.citations));
-    const warn = warningsBlock(ans.warnings);
-    if (warn) box.append(warn);
+    else box.append(textWithRefs(ans.text, ans.citations));
+    const cb = citationsBlock(ans.citations); if (cb) box.append(cb);
+    const warn = warningsBlock(ans.warnings); if (warn) box.append(warn);
     if (ans.advice) box.append(el("div", { class: "advice" }, el("b", {}, "Что сделать: "), ans.advice));
-    const practice = practiceBlock(ans.practice);
-    if (practice) box.append(practice);
-    const owner = ownerBlock(ans.owner);
-    if (owner) box.append(owner);
+    const practice = practiceBlock(ans.practice); if (practice) box.append(practice);
+    const owner = ownerBlock(ans.owner); if (owner) box.append(owner);
+    const g = glossaryBlock(ans.glossary); if (g) box.append(g);
+    const e = escalationBlock(ans.escalation); if (e) box.append(e);
     box.append(feedbackRow(ans, box));
   } else if (ans.mode === "uncertain") {
     box.append(el("div", { class: "answer-text" }, ans.text));
     box.append(variantsBlock(ans, box));
-    const ownerU = ownerBlock(ans.owner);
-    if (ownerU) box.append(ownerU);
-  } else if (ans.mode === "refused") {
+    const warn = warningsBlock(ans.warnings); if (warn) box.append(warn);
+    const ownerU = ownerBlock(ans.owner); if (ownerU) box.append(ownerU);
+    const e = escalationBlock(ans.escalation); if (e) box.append(e); else escalateButton(ans, box);
+  } else if (ans.mode === "clarify") {
+    box.append(el("div", { class: "answer-text" }, ans.text));
+    box.append(clarifyBlock(ans));
+  } else if (ans.mode === "by_division") {
+    if (ans.notice) box.append(el("div", { class: "answer-note" }, ans.notice));
+    box.append(el("div", { class: "answer-text" }, ans.text));
+    ans.sections.forEach(sec => box.append(sectionBlock(sec)));
+    const g = glossaryBlock(ans.glossary); if (g) box.append(g);
+    const e = escalationBlock(ans.escalation); if (e) box.append(e); else escalateButton(ans, box);
+    box.append(feedbackRow(ans, box));
+  } else if (ans.mode === "faq") {
+    box.append(el("div", { class: "answer-text" }, ans.text));
+    const f = ans.faq;
+    box.append(el("div", { class: "faq-meta muted" }, `${f.label} от ${f.created_at}` + (f.escalation_id ? ` по запросу ГН-${f.escalation_id}` : "")
+      + (f.doc_title ? ` · связано с: ${f.doc_title}${f.clause_no ? ", п. " + f.clause_no : ""}` : "") + ". В самих регламентах этого ответа нет."));
+    const warn = warningsBlock(ans.warnings); if (warn) box.append(warn);
+    box.append(feedbackRow(ans, box));
+  } else if (ans.mode === "refused" || ans.mode === "offtopic") {
     box.append(el("div", { class: "answer-text" }, ans.text));
   } else {
     box.append(el("div", { class: "answer-text" }, ans.text));
-    const practiceN = practiceBlock(ans.practice, "Похожий вопрос уже решали так");
-    if (practiceN) box.append(practiceN);
-    const ownerN = ownerBlock(ans.owner);
-    if (ownerN) box.append(ownerN);
-    practiceForm(ans.answer_id, null, box, "Знаете ответ? Напишите, как решается вопрос, — сохраню как пример из практики.");
+    const warn = warningsBlock(ans.warnings); if (warn) box.append(warn);
+    const e = escalationBlock(ans.escalation); if (e) box.append(e);
+    const practiceN = practiceBlock(ans.practice, "Похожий вопрос уже решали так"); if (practiceN) box.append(practiceN);
+    const ownerN = ownerBlock(ans.owner); if (ownerN) box.append(ownerN);
+    if (!ans.escalation) practiceForm(ans.answer_id, null, box, "Знаете ответ? Напишите, как решается вопрос, — сохраню как пример из практики.");
   }
   const steps = stepsBlock(ans.steps, ans.iterations);
   if (steps) box.append(steps);
@@ -264,17 +355,15 @@ async function openClause(pointId) {
   } catch (err) { body.textContent = err.message; }
 }
 
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const question = q.value.trim();
-  if (question.length < 2) return;
-  chat.append(el("div", { class: "msg user" }, question));
-  q.value = "";
+async function ask(question, division = null, divisionLabel = null) {
+  chat.append(el("div", { class: "msg user" }, divisionLabel ? `${divisionLabel}` : question));
   const wait = el("div", { class: "msg bot wait" }, "Ищу в документах…");
   chat.append(wait); scrollDown();
   form.querySelector("button").disabled = true;
+  const div = division || pendingDivision;
+  pendingDivision = null;
   try {
-    const ans = await api("/api/chat", { question, boxes: boxSel.value ? [boxSel.value] : null });
+    const ans = await api("/api/chat", { question, session_id: sessionId, division: div });
     wait.remove();
     renderAnswer(ans);
   } catch (err) {
@@ -283,6 +372,14 @@ form.addEventListener("submit", async (e) => {
     form.querySelector("button").disabled = false;
     q.focus();
   }
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const question = q.value.trim();
+  if (question.length < 2) return;
+  q.value = "";
+  ask(question);
 });
 
 q.addEventListener("keydown", (e) => {

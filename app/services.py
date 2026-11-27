@@ -6,8 +6,12 @@ import random
 from dataclasses import dataclass
 
 from app.answer import AnswerService
+from app.assistant import Assistant
 from app.boxes import BoxDirectory
 from app.db import Database
+from app.escalation import EscalationService
+from app.faq import FAQ
+from app.glossary import Glossary
 from app.index.bm25 import BM25Index
 from app.index.indexer import Indexer
 from app.index.models import make_embedder, make_reranker
@@ -35,6 +39,10 @@ class Services:
     searcher: Searcher
     answers: AnswerService
     limiter: RateLimiter
+    glossary: Glossary = None
+    faq: FAQ = None
+    escalations: EscalationService = None
+    assistant: Assistant = None
 
     def close(self) -> None:
         close_llm = getattr(self.llm, "close", None)
@@ -60,5 +68,9 @@ def build_services(settings, llm=None, embedder=None, reranker=None, rng: random
     searcher.indexer = indexer
     answers = AnswerService(settings, searcher, llm, memory, boxes, rng)
     limiter = RateLimiter(settings.rate_limit_per_minute, settings.redis_url)
+    glossary = Glossary.load(settings.glossary_tsv)
+    faq = FAQ(db, settings, embedder)
+    escalations = EscalationService(settings, db, faq)
+    assistant = Assistant(settings, db, boxes, searcher, answers, memory, glossary, faq, escalations)
     return Services(settings, db, boxes, embedder, reranker, store, bm25, indexer, memory, llm, searcher, answers,
-                    limiter)
+                    limiter, glossary, faq, escalations, assistant)
