@@ -32,7 +32,7 @@ REASONS = {
     "manual": "сотрудник попросил передать вопрос в службу качества",
 }
 SUBJECT_TAG = re.compile(r"\[ГН-(\d+)\]")
-_FINAL_TAG = re.compile(r"^\s*(?:финальный\s+)?ответ\s*:\s*", re.I)
+_FINAL_TAG = re.compile(r"^\s*(?:финальный\s+)?ответ\s*[.:]\s*", re.I)
 _NOT_FINAL = re.compile(r"^\s*(?:вопрос|уточн\w+|нужн\w+\s+(?:уточнить|информаци\w*))\b", re.I)
 _QUOTE_START = re.compile(
     r"^(?:>|-{2,}\s*(?:original|исходное|пересылаемое)|on .+ wrote:|.+\s+пишет:|\d{1,2}[./]\d{1,2}[./]\d{2,4}.+:$"
@@ -179,7 +179,7 @@ class EscalationService:
         if not body:
             raise EscalationError("В ответе эксперта нет текста")
         is_final = is_final_answer(body) if final is None else final
-        body = _FINAL_TAG.sub("", body).strip()
+        body = capitalize_first(_FINAL_TAG.sub("", body).strip())
         if not is_final:
             self.db.execute("UPDATE escalations SET status='clarification', expert_answer=?, expert_from=? WHERE id=?",
                             (body, expert, esc_id))
@@ -246,6 +246,17 @@ class EscalationService:
             except Exception:  # соединение уже закрыто
                 pass
         return {"processed": done, "skipped": skipped}
+
+
+def capitalize_first(text: str) -> str:
+    """Поднимает первую букву ответа, если после «ОТВЕТ:» остался текст с маленькой буквы."""
+    body = text or ""
+    i = 0
+    while i < len(body) and body[i] in " «\"'(":
+        i += 1
+    if i < len(body) and body[i].islower():
+        return body[:i] + body[i].upper() + body[i + 1:]
+    return body
 
 
 def extract_reply(text: str) -> str:

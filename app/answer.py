@@ -10,11 +10,12 @@ import time
 import uuid
 
 from app.llm import LLMError
-from app.llm.prompts import ANSWER_SYSTEM, REWRITE_SYSTEM, answer_user, looks_like_injection, rewrite_user
+from app.llm.prompts import (ANSWER_SYSTEM, CONFLICT_SYSTEM, REWRITE_SYSTEM, answer_user, conflict_user,
+                             looks_like_injection, rewrite_user)
 from app.profanity import REFUSAL_TEXT, ProfanityFilter
 from app.rewrite import rule_rewrite, split_question
 from app.search import Candidate, Searcher
-from app.text import normalize
+from app.text import normalize, stem
 
 log = logging.getLogger(__name__)
 
@@ -321,6 +322,10 @@ class AnswerService:
                         out["conflict"] = True
                         trace.add("conflict", "Проверка противоречий", "warn",
                                   "Модель отметила, что пункты противоречат друг другу")
+                    elif s.conflict_check and out.get("answer_kind") == "answer":
+                        cpt, cct = self._internal_conflict(question, ctx, out, trace)
+                        prompt_tokens += cpt
+                        completion_tokens += cct
                     if "injection" in (data.get("flags") or []):
                         out["warnings"].append("В тексте документа были фразы, похожие на команды. "
                                                "Они проигнорированы, ответ построен только по существу пункта.")
@@ -388,6 +393,78 @@ class AnswerService:
         log.info("ответ mode=%s score=%.3f boxes=%s iterations=%d latency=%dms", mode, top, res.route.boxes,
                  iteration, out["latency_ms"])
         return out
+
+    def _relevant_sentences(self, question: str, text: str, limit: int = 2, width: int = 380) -> str:
+        """Предложения пункта, которые лучше всего пересекаются с вопросом по основам слов."""
+        words = {stem(w) for w in re.findall(r"[а-яёa-z0-9]+", normalize(question)) if len(w) > 3}
+        sents = [x.strip() for x in re.split(r"(?<=[.!?;:])\s+|\n+", text) if x.strip()]
+        scored = []
+        for i, x in enumerate(sents):
+            have = {stem(w) for w in re.findall(r"[а-яёa-z0-9]+", normalize(x)) if len(w) > 3}
+            scored.append((len(words & have), -i, i))
+        keep = sorted(i for _, _, i in sorted(scored, reverse=True)[:limit])
+        return " ".join(sents[i][:width] for i in keep if scored[i][0] > 0)
+
+    def _internal_conflict(self, question: str, ctx: list[Candidate], out: dict, trace: "Trace") -> tuple[int, int]:
+        """Противоречие между пунктами одного документа: отдельная проверка по самым подходящим предложениям.
+        Расхождение принимается только если обе цитаты дословно есть в разных пунктах."""
+        t = time.perf_counter()
+        doc_id = ctx[0].doc_id
+        same = [c for c in ctx if c.doc_id == doc_id]
+        if len(same) < 2:
+            return 0, 0
+        clauses = []
+        for c in same:
+            txt = self._relevant_sentences(question, c.text)
+            if txt:
+                clauses.append((c, txt))
+        if len(clauses) < 2:
+            return 0, 0
+        try:
+            r = self.llm.chat(CONFLICT_SYSTEM, conflict_user(question, [
+                {"ref": c.ref, "text": txt} for c, txt in clauses]), json_mode=True)
+            data = parse_json(r.text)
+        except (LLMError, ValueError, json.JSONDecodeError) as e:
+            log.info("проверка противоречий не выполнена: %s", type(e).__name__)
+            return 0, 0
+        used = (r.prompt_tokens, r.completion_tokens)
+        try:
+            n1, n2 = int(data.get("n1")), int(data.get("n2"))
+        except (TypeError, ValueError):
+            n1 = n2 = 0
+        if not data.get("conflict") or n1 == n2 or not (1 <= n1 <= len(clauses) and 1 <= n2 <= len(clauses)):
+            trace.add("conflict", "Проверка противоречий", "ok", "Пункты одного документа не противоречат друг другу", t)
+            return used
+        c1, c2 = clauses[n1 - 1][0], clauses[n2 - 1][0]
+        quotes = []
+        for c, key in ((c1, "quote1"), (c2, "quote2")):
+            q = str(data.get(key) or "").strip().strip("«»\"")
+            if q and not verify_quote(q, c.text):
+                q = verbatim_part(q, c.text) or ""
+            quotes.append(q)
+        if not all(quotes):
+            trace.add("conflict", "Проверка противоречий", "ok", "Расхождение не подтвердилось цитатами из пунктов", t)
+            return used
+        why = str(data.get("why") or "").strip().rstrip(".")
+        why = re.sub(r"\s*vs\.?\s*", " или ", why, flags=re.I)
+        why = re.sub(r"\s+", " ", why).strip(" .")
+        cits = []
+        for n, (c, q) in enumerate(((c1, quotes[0]), (c2, quotes[1])), start=1):
+            cits.append({"n": n, "point_id": c.point_id, "doc_id": c.doc_id, "doc_title": c.doc_title,
+                         "clause_no": c.clause_no, "page": c.page, "ref": c.ref, "quote": q, "verified": True,
+                         "box": c.box})
+        out["conflict"] = True
+        out["citations"] = cits
+        # Вводный тезис («расходятся, ответить нельзя, вопрос передан») ставит assistant в notice,
+        # чтобы он не повторялся в тексте, совете и блоке эскалации.
+        out["text"] = (f"П. {c1.clause_no} говорит: «{quotes[0]}» [1]. "
+                       f"П. {c2.clause_no} говорит: «{quotes[1]}» [2]."
+                       + (f" Суть расхождения: {why}." if why else ""))
+        out["advice"] = "Какое правило действует, решает служба качества."
+        out["answer_check"] = "internal_conflict"
+        trace.add("conflict", "Проверка противоречий", "warn",
+                  f"Найдено расхождение внутри документа: п. {c1.clause_no} и п. {c2.clause_no}", t)
+        return used
 
     # --- шаги агента ---------------------------------------------------------------------
     def _trace_search(self, trace: "Trace", res, t: float) -> None:

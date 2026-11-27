@@ -10,6 +10,7 @@ import threading
 import numpy as np
 
 from app.memory import from_blob, to_blob
+from app.escalation import capitalize_first
 from app.text import tokens
 
 
@@ -30,6 +31,7 @@ class FAQ:
 
     def add(self, question: str, answer: str, *, doc_id: str = "", doc_title: str = "", clause_no: str = "",
             division: str = "", expert: str = "", escalation_id: int | None = None, source: str = "expert") -> int:
+        answer = capitalize_first((answer or "").strip())
         vec = self.embedder.embed_queries([question])[0]
         cur = self.db.execute(
             "INSERT INTO faq(question, answer, q_vec, doc_id, doc_title, clause_no, division, source, expert,"
@@ -74,13 +76,25 @@ class FAQ:
         r, sim, ov = best
         self.db.execute("UPDATE faq SET hits=hits+1, last_hit_at=datetime('now') WHERE id=?", (r["id"],))
         hits = int(self.db.query("SELECT hits FROM faq WHERE id=?", (r["id"],))[0]["hits"])
-        return {"id": r["id"], "question": r["question"], "answer": r["answer"], "created_at": r["created_at"],
+        return {"id": r["id"], "question": r["question"], "answer": capitalize_first(r["answer"]), "created_at": r["created_at"],
                 "doc_id": r["doc_id"], "doc_title": r["doc_title"], "clause_no": r["clause_no"],
                 "division": r["division"], "expert": r["expert"], "escalation_id": r["escalation_id"],
                 "similarity": round(sim, 3), "hits": hits,
                 "review_suggested": hits >= max(1, s.review_repeat_threshold)}
 
     def list(self, limit: int = 200) -> list[dict]:
-        return [{k: r[k] for k in ("id", "created_at", "question", "answer", "doc_title", "clause_no", "division",
-                                   "expert", "escalation_id", "hits", "last_hit_at", "active")}
-                for r in self.db.query("SELECT * FROM faq ORDER BY id DESC LIMIT ?", (limit,))]
+        out = []
+        for r in self.db.query("SELECT * FROM faq ORDER BY id DESC LIMIT ?", (limit,)):
+            item = {k: r[k] for k in ("id", "created_at", "question", "answer", "doc_title", "clause_no", "division",
+                                      "expert", "escalation_id", "hits", "last_hit_at", "active")}
+            item["answer"] = capitalize_first(item["answer"])
+            out.append(item)
+        return out
+
+    def public_list(self, limit: int = 200) -> list[dict]:
+        """Активные разъяснения для витрины хранилища: вопрос, ответ, номер заявки, дата."""
+        return [{"id": r["id"], "created_at": r["created_at"], "question": r["question"],
+                 "answer": capitalize_first(r["answer"]), "escalation_id": r["escalation_id"]}
+                for r in self.db.query(
+                    "SELECT id, created_at, question, answer, escalation_id FROM faq "
+                    "WHERE active=1 ORDER BY id DESC LIMIT ?", (limit,))]

@@ -24,11 +24,11 @@ _COMPARE = re.compile(r"как\s+правильно|в\s+одном\s+(мест�
                       r"отлича\w+|разниц\w+|во\s+всех\s+подразделени\w+|для\s+всех\s+подразделени\w+|"
                       r"общ\w+\s+срок|средн\w+", re.I | re.S)
 
-ESC_TEXT = ("Не смог ответить по регламентам, отправил запрос в службу качества ({to}), вы в копии ({cc}). "
+ESC_TEXT = ("Не удалось ответить по регламентам, запрос передан в службу качества ({to}), вы в копии ({cc}). "
             "Когда эксперт ответит, его разъяснение появится в базе, и я смогу отвечать им.")
 ESC_PARTIAL = "Ниже то, что удалось найти. Это не подтверждённый ответ: сверяйтесь с пунктами."
-ESC_CONFLICT = ("Пункты регламентов расходятся, поэтому я не выбираю один вариант и передал вопрос в службу "
-                "качества ({to}), вы в копии ({cc}). Что написано в документах:")
+ESC_CONFLICT = ("Пункты регламента расходятся, поэтому однозначно ответить нельзя. "
+                "Вопрос передан в службу качества.")
 BY_DIVISION_TEXT = ("Порядок зависит от подразделения. Ниже — отдельно для каждого, сроки и правила не смешиваю "
                     "и не усредняю.")
 CLARIFY_TEXT = ("Ответ зависит от подразделения: в регламентах {names} это описано по-разному. "
@@ -277,12 +277,13 @@ class Assistant:
             return
         out["escalation"] = esc
         to, cc = esc["to"], esc["cc"]
+        ticket = f"Номер заявки: ГН-{esc['id']}."
         if reason == "conflict":
-            out["notice"] = ESC_CONFLICT.format(to=to, cc=cc)
+            out["notice"] = ESC_CONFLICT + "\n" + ticket
         elif reason == "low_confidence":
-            out["text"] = ESC_TEXT.format(to=to, cc=cc) + " " + ESC_PARTIAL
+            out["text"] = ESC_TEXT.format(to=to, cc=cc) + "\n" + ticket + "\n" + ESC_PARTIAL
         else:
-            out["text"] = ESC_TEXT.format(to=to, cc=cc)
+            out["text"] = ESC_TEXT.format(to=to, cc=cc) + "\n" + ticket
         out.setdefault("steps", []).append({
             "step": "escalate", "title": "Запрос в службу качества", "status": "warn",
             "detail": ("Письмо отправлено" if esc["delivery"] == "smtp" else "Письмо сохранено в исходящих (SMTP не "

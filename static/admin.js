@@ -178,3 +178,20 @@ $("poll").onclick = async () => {
 };
 bindDropzone();
 if (token) { $("token").value = ""; login(); }
+
+
+// Имитация ролей из входа на главной странице: роль только меняет набор разделов, токен по-прежнему обязателен
+(function applyRole() {
+  let role = "";
+  try { role = (JSON.parse(localStorage.getItem("gnUser") || "null") || {}).role || ""; } catch (e) { role = ""; }
+  if (role === "expert") {
+    document.querySelectorAll("[data-min-role='admin']").forEach(el => { el.hidden = true; });
+  } else if (role === "employee") {
+    const sec = document.getElementById("secured");
+    if (sec) sec.remove();
+    const msg = document.createElement("section");
+    msg.className = "panel";
+    msg.textContent = "Этот раздел для службы качества и администратора. Войдите под другой ролью на главной странице.";
+    document.body.append(msg);
+  }
+})();

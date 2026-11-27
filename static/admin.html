@@ -7,12 +7,13 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/static/img/logo-32.png">
   <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
   <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20261127d">
 </head>
 <body class="admin">
   <header class="top">
     <div class="top-inner">
       <div class="brand"><img class="brand-logo" src="/static/img/logo-64.png" width="28" height="28" alt="" aria-hidden="true"> Где <em>написано?</em> · документы</div>
+      <a class="admin-link" href="/wiki">Хранилище</a>
       <a class="admin-link" href="/"><svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg> К чату</a>
     </div>
   </header>
@@ -25,7 +26,7 @@
     </div>
   </section>
   <div id="secured" hidden>
-    <section class="panel">
+    <section class="panel" data-min-role="admin">
       <h2>Загрузить <em>регламент</em></h2>
       <p class="muted">docx, doc, pdf (в том числе сканы), png/jpg, txt, md, rtf, odt, xlsx, html. Файл с тем же именем в том же ящичке заменяет старую редакцию — переиндексируются только изменённые пункты.</p>
       <form id="upload" class="upload-form">
@@ -43,14 +44,14 @@
       </form>
       <pre id="upload-log" class="muted upload-log"></pre>
     </section>
-    <section class="panel">
+    <section class="panel" data-min-role="admin">
       <h2>Документы <span id="stats" class="muted"></span></h2>
       <div class="table-wrap">
         <table><thead><tr><th>Файл</th><th>Ящичек</th><th>Пунктов</th><th>Статус</th><th>Обновлён</th><th></th></tr></thead>
           <tbody id="docs"></tbody></table>
       </div>
     </section>
-    <section class="panel">
+    <section class="panel" data-min-role="admin">
       <h2>Операторская: практика и вопросы <em>без ответа</em></h2>
       <h3>Практика от сотрудников</h3>
       <div class="table-wrap">
@@ -65,7 +66,7 @@
         <table><thead><tr><th>Когда</th><th>Вопрос</th><th>Пункт</th></tr></thead><tbody id="neg"></tbody></table>
       </div>
     </section>
-    <section class="panel">
+    <section class="panel" id="quality">
       <h2>Служба <em>качества</em></h2>
       <p class="muted">Запросы, которые бот не смог закрыть по регламентам. Финальный ответ эксперта попадает в базу разъяснений; сами регламенты не меняются.</p>
       <div class="row">
@@ -94,6 +95,6 @@
       <div class="table-wrap"><table><thead><tr><th>Документ</th><th>Пункт</th><th>Ссылок в ответах</th></tr></thead><tbody id="popular"></tbody></table></div>
     </section>
   </div>
-  <script src="/static/admin.js"></script>
+  <script src="/static/admin.js?v=20261127d"></script>
 </body>
 </html>

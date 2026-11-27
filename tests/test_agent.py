@@ -57,7 +57,7 @@ def test_confident_answer_has_full_trace(services_factory):
     ans = svc.answers.ask(Q_OK)
     assert ans["mode"] == "confident" and ans["answer_kind"] == "answer"
     assert steps_of(ans) == ["guard", "route", "retrieve", "rerank", "assess", "generate", "verify_quote",
-                             "verify_numbers", "decide"]
+                             "verify_numbers", "conflict", "decide"]
     assert all(s["status"] == "ok" for s in ans["steps"])
     assert ans["iterations"] == 0
     assert "Положение об отпусках" in next(s for s in ans["steps"] if s["step"] == "rerank")["detail"]

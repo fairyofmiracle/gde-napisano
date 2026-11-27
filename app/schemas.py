@@ -25,7 +25,7 @@ API_DESCRIPTION = """
 **Документация:** интерактивная схема — [`/docs`](/docs) (Swagger UI), читаемый вид — [`/redoc`](/redoc),
 машинное описание — [`/openapi.json`](/openapi.json).
 
-**Авторизация.** Публичные методы (чат, ящички, отзывы, служебные) токена не требуют.
+**Авторизация.** Публичные методы (чат, хранилище регламентов, ящички, отзывы, служебные) токена не требуют.
 Загрузка документов, удаление, переиндексация, статистика и операторская закрыты, пока не задан `ADMIN_TOKEN`.
 Токен передаётся заголовком `Authorization: Bearer <токен>` или `X-Admin-Token: <токен>`.
 В Swagger нажмите **Authorize** и введите токен в одно из двух полей.
@@ -432,7 +432,30 @@ class InboxAnswerOut(_Model):
     boxes: str | None = None
 
 
+class WikiDocumentOut(_Model):
+    doc_id: str
+    title: str
+    box: str = ""
+    box_name: str = Field(default="", description="Подразделение")
+    doc_date: str | None = Field(default=None, description="Дата файла, ДД.ММ.ГГГГ")
+    n_clauses: int = Field(description="Число пунктов")
+
+
+class WikiFaqOut(_Model):
+    id: int
+    question: str
+    answer: str
+    created_at: str
+    escalation_id: int | None = Field(default=None, description="Номер заявки ГН-N, если разъяснение по заявке")
+
+
+class WikiOut(_Model):
+    documents: list[WikiDocumentOut] = Field(default_factory=list)
+    faq: list[WikiFaqOut] = Field(default_factory=list, description="Разъяснения службы качества")
+
+
 class InboxFeedbackOut(_Model):
+
     created_at: str | None = None
     question: str | None = None
     doc_title: str | None = None

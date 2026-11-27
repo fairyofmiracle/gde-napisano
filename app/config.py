@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     vector_top_k: int = 30
     bm25_top_k: int = 30
     rerank_top_n: int = 12
+    conflict_check: bool = True  # отдельная проверка противоречий между пунктами одного документа
     answer_contexts: int = 3  # сколько пунктов отдавать модели для ответа
     answer_ctx_chars: int = 900  # длина одного пункта в запросе к модели, 0 = без ограничения
     rrf_k: int = 60

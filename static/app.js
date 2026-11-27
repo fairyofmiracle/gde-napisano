@@ -20,7 +20,11 @@ function currentUser() {
 function refreshLogin() {
   const u = currentUser();
   const link = document.getElementById("login-link");
-  if (link) link.textContent = u.email ? u.name : "Войти";
+  const ROLES = { employee: "сотрудник", expert: "эксперт службы качества", admin: "администратор" };
+  if (link) link.textContent = u.email ? `${u.name} (${ROLES[u.role] || ROLES.employee})` : "Войти";
+  const qa = document.getElementById("qa-link"), adm = document.getElementById("admin-link");
+  if (qa) qa.hidden = !(u.role === "expert" || u.role === "admin");
+  if (adm) adm.hidden = u.role !== "admin";
 }
 (function initLogin() {
   const dlg = document.getElementById("login");
@@ -31,6 +35,7 @@ function refreshLogin() {
     const u = currentUser();
     document.getElementById("login-name").value = u.name || "";
     document.getElementById("login-email").value = u.email || "";
+    document.getElementById("login-role").value = u.role || "employee";
     dlg.showModal();
   });
   document.getElementById("login-form").addEventListener("submit", (e) => {
@@ -38,7 +43,8 @@ function refreshLogin() {
     const name = document.getElementById("login-name").value.trim();
     const email = document.getElementById("login-email").value.trim();
     if (!name || !email) return;
-    localStorage.setItem(USER_KEY, JSON.stringify({ name, email }));
+    const role = document.getElementById("login-role").value;
+    localStorage.setItem(USER_KEY, JSON.stringify({ name, email, role }));
     refreshLogin(); dlg.close();
   });
   document.getElementById("login-out").addEventListener("click", () => {
@@ -50,12 +56,24 @@ function refreshLogin() {
 function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
     if (k === "class") e.className = v;
     else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
     else e.setAttribute(k, v);
   }
-  for (const c of children.flat()) if (c != null) e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  for (const c of children.flat(Infinity)) {
+    if (c == null || c === false) continue;
+    e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
   return e;
+}
+
+function nodes(...xs) {
+  return xs.flat(Infinity).filter(c => c != null && c !== false);
+}
+
+function fill(node, ...children) {
+  node.replaceChildren(...nodes(...children));
 }
 
 async function api(path, body) {
@@ -121,13 +139,60 @@ function renderChips() {
   ));
 }
 
+function clauseHref(c) {
+  return (c && c.link) || (c && c.point_id ? `#cite-${c.point_id}` : "#");
+}
+
+function findCiteCard(origin, c) {
+  const box = origin && origin.closest(".msg");
+  if (!box || !c) return null;
+  if (c.point_id) {
+    const id = "cite-" + c.point_id;
+    const sel = "#" + ((window.CSS && CSS.escape) ? CSS.escape(id) : id);
+    const byId = box.querySelector(sel);
+    if (byId) return byId;
+  }
+  if (c.n != null) return box.querySelector(`[data-cite-n="${c.n}"]`);
+  return null;
+}
+
+function highlightCard(card) {
+  if (!card) return;
+  card.classList.add("is-hl");
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  setTimeout(() => card.classList.remove("is-hl"), 1800);
+}
+
+function onRefClick(e, c, mode) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  const card = findCiteCard(e.currentTarget, c);
+  if (mode === "cite" && card) { highlightCard(card); return; }
+  if (card) highlightCard(card);
+  if (c && c.point_id) openClause(c.point_id);
+}
+
+function refLink(c, label, mode) {
+  return el("a", { href: clauseHref(c), class: "ref", onclick: (e) => onRefClick(e, c, mode) }, label);
+}
+
+function noteBlock(text) {
+  if (!text) return null;
+  const box = el("div", { class: "answer-note" });
+  String(text).split("\n").forEach((line, i) => {
+    if (i) box.append(document.createElement("br"));
+    if (line) box.append(line);
+  });
+  return box;
+}
+
 function textWithRefs(text, citations) {
   const span = el("div", { class: "answer-text" });
   const byN = Object.fromEntries((citations || []).map(c => [c.n, c]));
   const parts = String(text || "").split(/(\[\d+\])/);
   for (const p of parts) {
     const m = p.match(/^\[(\d+)\]$/);
-    if (m && byN[m[1]]) span.append(el("a", { href: "#", class: "ref", onclick: (e) => { e.preventDefault(); openClause(byN[m[1]].point_id); } }, `[${m[1]}]`));
+    if (m && byN[m[1]]) span.append(refLink(byN[m[1]], `[${m[1]}]`, "cite"));
     else if (!m) span.append(p);
   }
   return span;
@@ -183,21 +248,25 @@ function sourceLine(c) {
     c.page ? el("span", {}, "с. " + c.page) : null,
     c.doc_date ? el("span", { class: "muted" }, "файл от " + c.doc_date) : null,
     c.link ? el("a", { href: c.link, class: "ref", target: "_blank", rel: "noopener" }, "открыть в документе") : null,
-    el("a", { href: "#", class: "ref", onclick: (e) => { e.preventDefault(); openClause(c.point_id); } }, "показать пункт"));
+    c.point_id || c.link ? refLink(c, "показать пункт", "clause") : null);
 }
 
 function citationsBlock(citations) {
   if (!citations || !citations.length) return null;
   return el("div", { class: "sources" }, el("div", { class: "sources-title" }, "Где написано:"),
-    citations.map(c => el("div", { class: "source-item" },
+    citations.map(c => el("div", { class: "source-item", id: c.point_id ? `cite-${c.point_id}` : undefined, "data-cite-n": String(c.n), "data-point-id": c.point_id || "" },
       el("span", { class: "source-n" }, `[${c.n}]`),
       el("div", {}, sourceLine(c), c.quote ? el("blockquote", { class: "quote" }, `«${c.quote}»`) : null))));
 }
 
 function glossaryBlock(items) {
   if (!items || !items.length) return null;
-  return el("div", { class: "glossary" }, el("b", {}, "Сокращения: "),
-    items.map((g, i) => [i ? "; " : "", el("abbr", { title: g.full }, g.abbr), " — ", g.full]));
+  const parts = [];
+  items.forEach((g, i) => {
+    if (i) parts.push("; ");
+    parts.push(el("abbr", { title: g.full }, g.abbr), " — ", g.full);
+  });
+  return el("div", { class: "glossary" }, el("b", {}, "Сокращения: "), ...parts);
 }
 
 function escalationBlock(esc) {
@@ -213,7 +282,7 @@ function escalateButton(ans, container) {
     btn.disabled = true;
     try {
       const r = await api("/api/escalate", { answer_id: ans.answer_id, session_id: sessionId });
-      btn.replaceWith(el("div", { class: "answer-note" }, r.text), escalationBlock(r.escalation));
+      btn.replaceWith(...nodes(el("div", { class: "answer-note" }, r.text), escalationBlock(r.escalation)));
     } catch (err) { btn.disabled = false; alert(err.message); }
   } }, "Передать вопрос в службу качества");
   container.append(btn);
@@ -274,7 +343,7 @@ function variantsBlock(ans, container) {
   const list = el("div", { class: "variants" });
   ans.variants.forEach((v, i) => {
     const card = el("div", { class: "variant" },
-      el("div", { class: "cite" }, el("a", { href: "#", onclick: (e) => { e.preventDefault(); openClause(v.point_id); } }, `${i + 1}. ${v.ref}`)),
+      el("div", { class: "cite" }, refLink(v, `${i + 1}. ${v.ref}`, "clause")),
       el("div", { class: "snippet" }, v.text.length > 360 ? v.text.slice(0, 360) + "…" : v.text),
       practiceBlock(v.practice),
       el("button", { type: "button", class: "pick", onclick: async () => {
@@ -325,7 +394,8 @@ function renderAnswer(ans) {
   box.append(modePlaque(ans.mode));
   if (ans.division && ans.division.name && ans.mode !== "by_division") box.append(el("div", { class: "muted division-line" }, "По регламенту: " + ans.division.name));
   if (ans.mode === "confident") {
-    if (ans.notice) box.append(el("div", { class: "answer-note" }, ans.notice));
+    if (ans.notice) box.append(noteBlock(ans.notice));
+    if (ans.conflict && ans.answer_check === "internal_conflict") box.append(el("div", { class: "conflict-flag" }, "Расхождение внутри регламента. Ниже оба пункта."));
     if (ans.answer_kind === "quote_only") box.append(el("div", { class: "answer-note" }, ans.text));
     else box.append(textWithRefs(ans.text, ans.citations));
     const cb = citationsBlock(ans.citations); if (cb) box.append(cb);
@@ -346,7 +416,7 @@ function renderAnswer(ans) {
     box.append(el("div", { class: "answer-text" }, ans.text));
     box.append(clarifyBlock(ans));
   } else if (ans.mode === "by_division") {
-    if (ans.notice) box.append(el("div", { class: "answer-note" }, ans.notice));
+    if (ans.notice) box.append(noteBlock(ans.notice));
     box.append(el("div", { class: "answer-text" }, ans.text));
     ans.sections.forEach(sec => box.append(sectionBlock(sec)));
     const g = glossaryBlock(ans.glossary); if (g) box.append(g);
@@ -382,9 +452,9 @@ async function openClause(pointId) {
   dlg.showModal();
   try {
     const c = await api(`/api/clauses/${encodeURIComponent(pointId)}`);
-    body.replaceChildren(
+    fill(body,
       el("h2", {}, c.ref), c.section ? el("div", { class: "muted" }, c.section) : null,
-      el("div", { class: "context" }, c.context.map(x => el("p", { class: x.point_id === pointId ? "hl" : "" },
+      el("div", { class: "context" }, (c.context || []).map(x => el("p", { class: x.point_id === pointId ? "hl" : "" },
         x.clause_no ? el("b", {}, x.clause_no + " ") : null, x.text))),
       practiceBlock(c.practice, "Практика по этому пункту"));
   } catch (err) { body.textContent = err.message; }

@@ -6,20 +6,29 @@
   <title>Где написано? — документ</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/static/img/logo-32.png">
   <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20261127d">
 </head>
 <body class="admin doc-page">
   <header class="top">
     <div class="top-inner">
       <div class="brand"><img class="brand-logo" src="/static/img/logo-64.png" width="28" height="28" alt="" aria-hidden="true"> Где <em>написано?</em> · документ</div>
+      <a class="admin-link" href="/wiki">Хранилище</a>
       <a class="admin-link" href="/"><svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg> К чату</a>
     </div>
   </header>
-  <section class="panel">
-    <h2 id="doc-title">Загружаю…</h2>
-    <div id="doc-meta" class="muted"></div>
-    <div id="doc-body" class="doc-body"></div>
+  <section class="panel doc-layout">
+    <aside class="doc-toc">
+      <details open>
+        <summary>Содержание</summary>
+        <nav id="doc-toc-nav"></nav>
+      </details>
+    </aside>
+    <div class="doc-main">
+      <h2 id="doc-title">Загружаю…</h2>
+      <div id="doc-meta" class="muted"></div>
+      <div id="doc-body" class="doc-body"></div>
+    </div>
   </section>
-  <script src="/static/doc.js"></script>
+  <script src="/static/doc.js?v=20261127d"></script>
 </body>
 </html>

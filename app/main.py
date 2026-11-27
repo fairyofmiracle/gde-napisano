@@ -52,6 +52,7 @@ from app.schemas import (
     StatsOut,
     UploadOut,
     VersionOut,
+    WikiOut,
     error_responses,
 )
 from app.security import AdminGuard, client_ip, client_key, require_admin, safe_filename, safe_join
@@ -130,6 +131,8 @@ def _install_security_headers(app: FastAPI) -> None:
         h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         if path.startswith(("/api/admin", "/api/operator", "/admin")):
             h["Cache-Control"] = "no-store"
+        elif path.startswith("/static/") and path.rsplit(".", 1)[-1].lower() in ("js", "css"):
+            h["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
 
@@ -242,6 +245,10 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     @app.get("/doc/{doc_id}", include_in_schema=False)
     def doc_page(doc_id: str):
         return FileResponse(STATIC / "doc.html")
+
+    @app.get("/wiki", include_in_schema=False)
+    def wiki_page():
+        return FileResponse(STATIC / "wiki.html")
 
     @app.get("/admin", include_in_schema=False)
     def admin_page():
@@ -372,6 +379,26 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         s.db.execute("UPDATE answers SET escalated=1 WHERE answer_id=?", (body.answer_id,))
         return {"ok": True, "escalation": esc,
                 "text": f"Отправил запрос в службу качества ({esc['to']}), вы в копии ({esc['cc']})."}
+
+    @app.get("/api/wiki", response_model=WikiOut, tags=["Документы"],
+             summary="Список регламентов и разъяснений",
+             description="Проиндексированные регламенты и опубликованные разъяснения службы качества "
+                         "для страницы хранилища. Токен не нужен.")
+    def wiki_index(request: Request):
+        s: Services = svc(request)
+        from app.answer import doc_date
+
+        docs = []
+        for r in s.db.query(
+            "SELECT doc_id, title, box, mtime, n_clauses FROM files "
+            "WHERE status='ok' AND n_clauses > 0 ORDER BY box, title"):
+            docs.append({
+                "doc_id": r["doc_id"], "title": r["title"], "box": r["box"] or "",
+                "box_name": s.boxes.name(r["box"]) if r["box"] else "",
+                "doc_date": doc_date(r["mtime"]) if r["mtime"] else None,
+                "n_clauses": int(r["n_clauses"]),
+            })
+        return {"documents": docs, "faq": s.faq.public_list()}
 
     @app.get("/api/documents/{doc_id}/clauses", tags=["Документы"], summary="Документ целиком по пунктам",
              description="Все пункты документа по порядку: для перехода к месту в документе с подсветкой.",

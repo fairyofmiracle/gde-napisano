@@ -67,7 +67,8 @@ def test_not_found_escalates_to_outbox_with_user_in_cc(svc):
     assert ans["mode"] == "not_found"
     esc = ans["escalation"]
     assert esc and esc["to"] == QUALITY and esc["cc"] == USER and esc["delivery"] == "outbox"
-    assert "отправил запрос в службу качества" in ans["text"] and "вы в копии" in ans["text"]
+    assert "запрос передан в службу качества" in ans["text"] and "вы в копии" in ans["text"]
+    assert "Номер заявки: ГН-" in ans["text"] and "\nНомер заявки:" in ans["text"]
     files = outbox(svc)
     assert len(files) == 1
     msg = email.message_from_bytes(files[0].read_bytes(), policy=email.policy.default)
@@ -204,9 +205,24 @@ def test_repeat_counter_suggests_regulation_review(svc):
 
 
 def test_reply_parsing_helpers():
+    from app.escalation import capitalize_first
     assert extract_reply("Ответ тут\n\n> цитата\n> ещё") == "Ответ тут"
     assert is_final_answer("ОТВЕТ: да") and not is_final_answer("Уточните регион?")
     assert not is_final_answer("А какой регион?")
+    assert capitalize_first("корпоративной скидки нет") == "Корпоративной скидки нет"
+    assert capitalize_first("700 рублей") == "700 рублей"
+
+
+def test_expert_answer_capitalizes_after_otvet_prefix(svc):
+    a1 = svc.assistant.ask("Какой размер корпоративной скидки на парковку в офисе?", session_id="cap1")
+    assert a1.get("escalation")
+    res = svc.escalations.answer(a1["escalation"]["id"],
+                                 "ОТВЕТ: корпоративной скидки в этом офисе нет.", expert="qa@example.local")
+    assert res["final"]
+    item = next(x for x in svc.faq.list() if x["id"] == res["faq_id"])
+    assert item["answer"].startswith("Корпоративной скидки")
+    again = svc.assistant.ask("Какой размер корпоративной скидки на парковку в офисе?", session_id="cap2")
+    assert again["mode"] == "faq" and again["text"].startswith("Корпоративной скидки")
 
 
 # ---------- (b) уточнение подразделения ----------
@@ -316,7 +332,12 @@ def test_llm_conflict_flag_escalates(svc):
     svc.answers.llm = ConflictLLM()
     ans = svc.assistant.ask("Гарантийный срок исполнителя в Дирекции ИБ?", session_id="c1")
     assert ans["conflict"] and ans["escalation"]["reason"] == "conflict"
-    assert ans["notice"].startswith("Пункты регламентов расходятся") and "Пункты расходятся" in ans["text"]
+    assert ans["notice"].startswith("Пункты регламента расходятся")
+    assert "однозначно ответить нельзя" in ans["notice"] and "Вопрос передан в службу качества" in ans["notice"]
+    assert "Номер заявки: ГН-" in ans["notice"] and "\nНомер заявки:" in ans["notice"]
+    assert "Что написано в документах" not in ans["notice"]
+    assert "передал" not in ans["notice"]
+    assert "Пункты расходятся" in ans["text"]
 
 
 # ---------- (e) вопросы вне базы и отсутствующие документы ----------
