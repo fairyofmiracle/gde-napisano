@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     vector_top_k: int = 30
     bm25_top_k: int = 30
     rerank_top_n: int = 12
+    answer_contexts: int = 3  # сколько пунктов отдавать модели для ответа
+    answer_ctx_chars: int = 900  # длина одного пункта в запросе к модели, 0 = без ограничения
     rrf_k: int = 60
     max_clause_chars: int = 1200
 
@@ -100,6 +102,7 @@ class Settings(BaseSettings):
     gigachat_model: str = "GigaChat"
     gigachat_ca_bundle: str = ""  # путь к корневому сертификату Минцифры (russian_trusted_root_ca.pem)
     gigachat_timeout: float = 60.0
+    gigachat_base_url: str = "https://gigachat.devices.sberbank.ru/api/v1"
     llm_retries: int = 2  # повторы при сетевых ошибках, 429 и 5xx
     llm_retry_backoff: float = 1.0  # секунды, удваивается с каждой попыткой
     # Предохранитель: после стольких сбоев подряд модель считается недоступной на llm_breaker_cooldown секунд

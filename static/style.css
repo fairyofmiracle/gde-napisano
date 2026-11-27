@@ -655,3 +655,9 @@ tbody tr:hover td { background: rgba(210, 220, 229, .04); }
 .kpi b { display: block; font-size: 22px; }
 .answer-form { display: grid; gap: 6px; margin-top: 6px; }
 .answer-form textarea { width: 100%; min-height: 60px; }
+
+.login-note { color: var(--muted, #9aa4ad); font-size: .9rem; line-height: 1.4; max-width: 28rem; }
+.login-form { display: flex; flex-direction: column; gap: 12px; min-width: min(26rem, 80vw); }
+.login-form label { display: flex; flex-direction: column; gap: 4px; font-size: .9rem; }
+.login-form input { padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(210, 220, 229, .25); background: transparent; color: inherit; font: inherit; }
+.login-actions { display: flex; gap: 8px; }

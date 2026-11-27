@@ -72,6 +72,7 @@ class GigaChatLLM(LLM):
         self.credentials = settings.gigachat_credentials.strip()
         self.scope = settings.gigachat_scope
         self.model = settings.gigachat_model
+        self.base_url = settings.gigachat_base_url
         self.timeout = settings.gigachat_timeout
         self.temperature = settings.llm_temperature
         self.max_tokens = settings.llm_max_tokens
@@ -86,8 +87,9 @@ class GigaChatLLM(LLM):
     def _make_client(self):
         from gigachat import GigaChat
 
+        # Адрес задан явно: у библиотеки по умолчанию api.giga.chat, который из ряда сетей отвечает 404
         return GigaChat(credentials=self.credentials, scope=self.scope, model=self.model, verify_ssl_certs=True,
-                        ca_bundle_file=self.ca, timeout=self.timeout)
+                        ca_bundle_file=self.ca, timeout=self.timeout, base_url=self.base_url)
 
     @property
     def client(self):

@@ -12,6 +12,41 @@ if (!sessionId) {
 }
 let pendingDivision = null;
 
+// Имитация корпоративного входа: имя и почта сотрудника уходят вместе с вопросом
+const USER_KEY = "gnUser";
+function currentUser() {
+  try { return JSON.parse(localStorage.getItem(USER_KEY) || "null") || {}; } catch (e) { return {}; }
+}
+function refreshLogin() {
+  const u = currentUser();
+  const link = document.getElementById("login-link");
+  if (link) link.textContent = u.email ? u.name : "Войти";
+}
+(function initLogin() {
+  const dlg = document.getElementById("login");
+  const link = document.getElementById("login-link");
+  if (!dlg || !link) return;
+  link.addEventListener("click", (e) => {
+    e.preventDefault();
+    const u = currentUser();
+    document.getElementById("login-name").value = u.name || "";
+    document.getElementById("login-email").value = u.email || "";
+    dlg.showModal();
+  });
+  document.getElementById("login-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const name = document.getElementById("login-name").value.trim();
+    const email = document.getElementById("login-email").value.trim();
+    if (!name || !email) return;
+    localStorage.setItem(USER_KEY, JSON.stringify({ name, email }));
+    refreshLogin(); dlg.close();
+  });
+  document.getElementById("login-out").addEventListener("click", () => {
+    localStorage.removeItem(USER_KEY); refreshLogin(); dlg.close();
+  });
+  refreshLogin();
+})();
+
 function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -363,7 +398,10 @@ async function ask(question, division = null, divisionLabel = null) {
   const div = division || pendingDivision;
   pendingDivision = null;
   try {
-    const ans = await api("/api/chat", { question, session_id: sessionId, division: div });
+    const u = currentUser();
+    const body = { question, session_id: sessionId, division: div };
+    if (u.email) { body.user_email = u.email; body.user_name = u.name || ""; }
+    const ans = await api("/api/chat", body);
     wait.remove();
     renderAnswer(ans);
   } catch (err) {

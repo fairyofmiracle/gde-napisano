@@ -120,6 +120,16 @@ def _plural(n: int, one: str, few: str, many: str) -> str:
     return f"{n} {word}"
 
 
+
+def clip_text(text: str, limit: int) -> str:
+    """Укорачивает пункт для запроса к модели по границе предложения; цитаты проверяются по полному тексту."""
+    if limit <= 0 or len(text) <= limit:
+        return text
+    cut = text[:limit]
+    m = max(cut.rfind(". "), cut.rfind("; "), cut.rfind("\n"))
+    return (cut[:m + 1] if m > limit * 0.5 else cut).rstrip()
+
+
 class Trace:
     """Ход работы агента: шаги с итогом и временем, показываются в ответе API и в интерфейсе."""
 
@@ -235,7 +245,7 @@ class AnswerService:
         provider = self.llm.provider if any(rewrite_tokens) else ""
 
         if mode == CONFIDENT:
-            ctx = [c for c in cands[:4] if c.score >= max(s.uncertain_threshold, top * 0.5)]
+            ctx = [c for c in cands[:s.answer_contexts] if c.score >= max(s.uncertain_threshold, top * 0.5)]
             suspicious = [i + 1 for i, c in enumerate(ctx) if looks_like_injection(c.text)]
             if suspicious:
                 trace.add("injection", "Проверка текста пунктов", "warn",
@@ -245,7 +255,8 @@ class AnswerService:
             data, llm_failed = None, False
             try:
                 r = self.llm.chat(ANSWER_SYSTEM, answer_user(question, [
-                    {"ref": c.ref, "section": c.section, "text": c.text} for c in ctx]), json_mode=True)
+                    {"ref": c.ref, "section": c.section, "text": clip_text(c.text, s.answer_ctx_chars)} for c in ctx]),
+                    json_mode=True)
                 prompt_tokens += r.prompt_tokens
                 completion_tokens += r.completion_tokens
                 provider = r.provider
@@ -273,6 +284,7 @@ class AnswerService:
                     trace.add("verify_quote", "Проверка цитаты", "ok",
                               f"Подтверждено цитат: {len(citations)} из {len(data.get('quotes') or []) or 1}")
                     text = self._clean_refs(str(data.get("answer") or "").strip(), len(ctx))
+                    citations = self._complete_citations(data, text, ctx, citations)
                     advice = str(data.get("advice") or "").strip()
                     cited = [ctx[c["n"] - 1] for c in citations]
                     bad = unsupported_numbers(text, cited) if s.check_numbers else []
@@ -529,6 +541,26 @@ class AnswerService:
         return {"point_id": c.point_id, "doc_id": c.doc_id, "doc_title": c.doc_title, "clause_no": c.clause_no,
                 "page": c.page, "ref": c.ref, "section": c.section, "text": c.text, "box": c.box,
                 "score": round(c.score, 4), "practice": self.memory.practice_for(c.doc_id, c.clause_no, 1)}
+
+    def _complete_citations(self, data: dict, text: str, ctx: list[Candidate], citations: list[dict]) -> list[dict]:
+        """Ответ из нескольких частей ссылается на пункты, цитату из которых модель дала неточно:
+        для таких пунктов берём начало пункта дословно, чтобы ссылка и проверка чисел опирались на них."""
+        have = {c["n"] for c in citations}
+        refs = {int(m) for m in re.findall(r"\[(\d+)\]", text)}
+        for u in data.get("used") or []:
+            try:
+                refs.add(int(u))
+            except (TypeError, ValueError):
+                pass
+        out = list(citations)
+        for n in sorted(refs):
+            if 1 <= n <= len(ctx) and n not in have:
+                c = ctx[n - 1]
+                quote = re.split(r"(?<=[.!?])\s", c.text, maxsplit=1)[0]
+                out.append({"n": n, "point_id": c.point_id, "doc_id": c.doc_id, "doc_title": c.doc_title,
+                            "clause_no": c.clause_no, "page": c.page, "ref": c.ref, "quote": quote,
+                            "verified": True, "auto_quote": True, "box": c.box})
+        return out
 
     def _fallback_citation(self, data: dict, ctx: list[Candidate]) -> list[dict]:
         """Модель не дала дословную цитату: показываем начало пункта, на который она сослалась."""
