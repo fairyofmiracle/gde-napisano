@@ -18,6 +18,7 @@ CHECK_LABELS = {
     "verify_quote": "Цитата",
     "verify_numbers": "Числа и даты",
     "conflict": "Противоречия",
+    "verifier": "Проверяющий агент",
 }
 
 CONFIDENCE_RU = {"high": "высокая", "medium": "средняя", "low": "низкая"}

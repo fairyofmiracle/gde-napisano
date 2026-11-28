@@ -8,11 +8,13 @@ import random
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 
 from app import progress
 from app.llm import LLMError
-from app.llm.prompts import (ANSWER_SYSTEM, CONFLICT_SYSTEM, REWRITE_SYSTEM, answer_user, conflict_user,
-                             looks_like_injection, rewrite_user)
+from app.llm.prompts import (ANSWER_SYSTEM, CONFLICT_SYSTEM, REWRITE_SYSTEM, VERIFIER_SYSTEM, answer_user,
+                             conflict_user, looks_like_injection, rewrite_user, verifier_user)
 from app.profanity import REFUSAL_TEXT, ProfanityFilter
 from app.rewrite import rule_rewrite, split_question
 from app.search import Candidate, Searcher
@@ -21,6 +23,9 @@ from app.text import normalize, stem
 log = logging.getLogger(__name__)
 
 CONFIDENT, UNCERTAIN, NOT_FOUND = "confident", "uncertain", "not_found"
+
+# Отдельный пул для агента-проверяющего: вызов с таймаутом не держит поток ответа
+_VERIFIER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="verifier")
 
 # Слова, по которым видно, что вопрос опирается на предыдущий разговор
 _CONTEXT_WORDS = {"а", "он", "она", "оно", "они", "его", "ее", "её", "их", "это", "этот", "эта", "эти", "этого", "этом",
@@ -189,6 +194,28 @@ class AnswerService:
     # --- агент ---------------------------------------------------------------------------
     def ask(self, question: str, boxes: list[str] | None = None, *, strict: bool = False,
             search_query: str | None = None, record: bool = True, route: bool = True, pre=None) -> dict:
+        """Ответ конвейера и, если включено, второй агент-проверяющий: он перечитывает готовый ответ
+        по найденным пунктам и решает — принять, искать ещё раз (одна попытка) или передать в службу качества."""
+        t0 = time.perf_counter()
+        out = self._ask_once(question, boxes, strict=strict, search_query=search_query, route=route, pre=pre)
+        s = self.settings
+        if (record and getattr(s, "verifier_enabled", False) and out.get("mode") == CONFIDENT
+                and out.get("answer_kind") == "answer" and not out.get("conflict")):
+            out = self._review(out, boxes, strict=strict, route=route)
+            out["latency_ms"] = int((time.perf_counter() - t0) * 1000)
+        rec = out.pop("_rec", None)
+        if not record or rec is None:
+            return out
+        self.memory.record_answer(
+            out["answer_id"], out["question"], rec["q_vec"], rec["boxes"], out["mode"], rec["top"], rec["cands"],
+            rec["provider"], out["tokens"]["prompt"], out["tokens"]["completion"], out["latency_ms"],
+        )
+        log.info("ответ mode=%s score=%.3f boxes=%s iterations=%d latency=%dms", out["mode"], rec["top"],
+                 rec["boxes"], out.get("iterations", 0), out["latency_ms"])
+        return out
+
+    def _ask_once(self, question: str, boxes: list[str] | None = None, *, strict: bool = False,
+                  search_query: str | None = None, route: bool = True, pre=None) -> dict:
         """Шаги агента: проверка вопроса → маршрут → поиск → реранк → оценка уверенности →
         (если мало уверенности) переформулировка и повторный поиск → ответ модели →
         проверка цитаты и чисел → решение: ответ, уточнение (варианты) или «в документах нет»."""
@@ -398,16 +425,105 @@ class AnswerService:
         out["steps"] = trace.steps
         self._attach_dates(out)
         out["_candidates"] = cands
-        if not record:
-            return out
-        self.memory.record_answer(
-            answer_id, question, res.q_vec, res.route.boxes, mode, top,
-            [{"point_id": c.point_id, "doc_id": c.doc_id, "doc_title": c.doc_title, "clause_no": c.clause_no,
-              "box": c.box, "score": round(c.score, 4)} for c in cands[:5]],
-            provider, prompt_tokens, completion_tokens, out["latency_ms"],
-        )
-        log.info("ответ mode=%s score=%.3f boxes=%s iterations=%d latency=%dms", mode, top, res.route.boxes,
-                 iteration, out["latency_ms"])
+        out["_rec"] = {"q_vec": res.q_vec, "boxes": res.route.boxes, "top": top, "provider": provider,
+                       "cands": [{"point_id": c.point_id, "doc_id": c.doc_id, "doc_title": c.doc_title,
+                                  "clause_no": c.clause_no, "box": c.box, "score": round(c.score, 4)}
+                                 for c in cands[:5]]}
+        return out
+
+    # --- агент-проверяющий ----------------------------------------------------------------
+    def _verify_call(self, question: str, out: dict) -> tuple[dict | None, tuple[int, int], str]:
+        """Отдельный вызов модели в роли проверяющего. Возвращает (вердикт или None, токены, причина сбоя)."""
+        s = self.settings
+        by_point = {c.point_id: c for c in out.get("_candidates") or []}
+        clauses, seen = [], set()
+        for cit in out.get("citations") or []:
+            c = by_point.get(cit.get("point_id"))
+            if c is None or c.point_id in seen:
+                continue
+            seen.add(c.point_id)
+            clauses.append({"ref": c.ref, "text": clip_text(c.text, s.answer_ctx_chars)})
+        if not clauses:
+            return None, (0, 0), "нет пунктов для сверки"
+        prompt = verifier_user(question, out.get("text") or "", clauses)
+        llm = getattr(self.llm, "inner", self.llm)  # сбой проверяющего не должен отключать основную модель
+        fut = _VERIFIER_POOL.submit(llm.chat, VERIFIER_SYSTEM, prompt, True)
+        try:
+            r = fut.result(timeout=max(0.5, float(s.verifier_timeout)))
+        except FutureTimeout:
+            fut.cancel()
+            return None, (0, 0), "таймаут"
+        except Exception as e:  # noqa: BLE001 — любая ошибка проверяющего не мешает ответу
+            return None, (0, 0), type(e).__name__
+        used = (int(r.prompt_tokens or 0), int(r.completion_tokens or 0))
+        try:
+            data = parse_json(r.text)
+        except (ValueError, json.JSONDecodeError):
+            return None, used, "ответ не JSON"
+        verdict = str(data.get("verdict") or "").strip().lower()
+        if verdict not in ("ok", "retry", "escalate"):
+            return None, used, "неизвестный вердикт"
+        query = str(data.get("query") or "").strip()[:300]
+        reason = re.sub(r"\s+", " ", str(data.get("reason") or "")).strip()[:300]
+        if verdict == "retry" and (not query or normalize(query) == normalize(question)):
+            return None, used, "нет новой формулировки для повторного поиска"
+        return {"verdict": verdict, "query": query, "reason": reason}, used, ""
+
+    def _review(self, out: dict, boxes, *, strict: bool, route: bool) -> dict:
+        question = out["question"]
+        t = time.perf_counter()
+        progress.status("Проверяющий агент сверяет ответ с пунктами", "verifier")
+        verdict, used, fail = self._verify_call(question, out)
+        out["tokens"]["prompt"] += used[0]
+        out["tokens"]["completion"] += used[1]
+        info = {"verdict": verdict["verdict"] if verdict else "skipped", "reason": (verdict or {}).get("reason", "")
+                or fail, "query": (verdict or {}).get("query", ""), "prompt_tokens": used[0],
+                "completion_tokens": used[1], "ms": int((time.perf_counter() - t) * 1000)}
+        out["verifier"] = info
+        steps = out["steps"]
+        decide = steps.pop() if steps and steps[-1].get("step") == "decide" else None
+        trace = Trace()
+        if verdict is None:
+            log.info("проверяющий агент не дал вердикт (%s): ответ отдан без изменений", fail)
+            trace.add("verifier", "Проверяющий агент", "skip", f"Проверка не выполнена ({fail}): ответ без изменений",
+                      t)
+        elif verdict["verdict"] == "ok":
+            trace.add("verifier", "Проверяющий агент", "ok", "Ответ подтверждён найденными пунктами"
+                      + (f": {verdict['reason']}" if verdict["reason"] else ""), t)
+        elif verdict["verdict"] == "escalate":
+            trace.add("verifier", "Проверяющий агент", "warn", "Ответ не подтверждён пунктами"
+                      + (f": {verdict['reason']}" if verdict["reason"] else "") + ". Вопрос уходит в службу качества", t)
+            out["verifier_doubt"] = verdict["reason"] or "ответ не подтверждён найденными пунктами"
+        else:
+            trace.add("verifier", "Проверяющий агент", "warn",
+                      f"Пункты отвечают не на тот вопрос: повторный поиск по «{verdict['query']}»", t)
+            steps.extend(trace.steps)
+            trace = Trace()
+            again = self._ask_once(question, boxes, strict=strict, search_query=verdict["query"], route=route)
+            out["tokens"]["prompt"] += again["tokens"]["prompt"]
+            out["tokens"]["completion"] += again["tokens"]["completion"]
+            if again.get("mode") == CONFIDENT and again.get("answer_kind") == "answer" and not again.get("conflict"):
+                again_steps = [dict(st, title="Повтор: " + st["title"]) for st in again["steps"]
+                               if st.get("step") not in ("guard", "decide")]
+                again["steps"] = steps + again_steps
+                again["tokens"] = out["tokens"]
+                again["verifier"] = dict(info, retry_used=True)
+                again["iterations"] = int(out.get("iterations") or 0) + 1
+                if again.get("_rec") and out.get("_rec"):
+                    again["_rec"]["provider"] = again["_rec"]["provider"] or out["_rec"]["provider"]
+                out = again
+                steps = out["steps"]
+                decide = {"step": "decide", "title": "Решение", "status": "ok",
+                          "detail": "Ответ с проверенной цитатой после повторного поиска", "ms": None}
+            else:
+                info["retry_used"] = False
+                if progress.active():  # в потоке уже мог показаться черновик повтора: возвращаем исходный ответ
+                    progress.emit("draft", text=out.get("text") or "")
+                trace.add("verifier", "Проверяющий агент", "warn",
+                          "Повторный поиск не дал проверенного ответа: оставлен исходный ответ с цитатой")
+        steps.extend(trace.steps)
+        if decide is not None:
+            steps.append(decide)
         return out
 
     def _relevant_sentences(self, question: str, text: str, limit: int = 2, width: int = 380) -> str:

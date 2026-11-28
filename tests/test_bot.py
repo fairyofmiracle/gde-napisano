@@ -360,19 +360,21 @@ def test_voice_transcript_goes_through_profanity_filter(services_factory):
         out, reply = collector()
         asyncio.run(svc.handle_voice(1, 2, 5000, downloader(1.0), reply))
     assert json.loads(posted[0])["question"] == recognized
-    assert out[0] == f"Распознано: «{recognized}»"
-    assert out[1] == REFUSAL_TEXT
-    assert "Источники:" not in out[1] and "Возможные пункты:" not in out[1] and "Ответственный" not in out[1]
+    assert len(out) == 1
+    assert out[0] == f"Вопрос: «{recognized}»\n\n{REFUSAL_TEXT}"
+    assert "Источники:" not in out[0] and "Возможные пункты:" not in out[0] and "Ответственный" not in out[0]
 
 
 @needs_ffmpeg
-def test_voice_flow_shows_recognized_text_then_answer():
+def test_voice_flow_gives_one_message_with_question_and_answer():
     tr, seen = FakeTranscriber("Сколько дней отпуска?"), []
     svc = BotService(make_settings(), make_api(seen=seen), tr)
     out, reply = collector()
     asyncio.run(svc.handle_voice(1, 2, 5000, downloader(2.0), reply))
-    assert out[0] == "Распознано: «Сколько дней отпуска?»"
-    assert "Источники:" in out[1]
+    assert len(out) == 1
+    assert out[0].startswith("Вопрос: «Сколько дней отпуска?»\n\n")
+    assert "Источники:" in out[0]
+    assert "Распознано" not in out[0] and "Нашла пункты" not in out[0]
     assert tr.calls and tr.calls[0][1] == pytest.approx(2.0, abs=0.1)
     import json
     assert json.loads(seen[0][1])["question"] == "Сколько дней отпуска?"
@@ -780,3 +782,48 @@ def test_bot_simplify_button_and_reply():
     assert "пресейл-архитектор" in text
     assert "4 рабочих часа" in text
     assert "п. 5.1" in text
+
+
+# ---------- голос и короткие реакции: одно сообщение, без лишних заявок ----------
+
+def test_voice_asr_term_is_fixed_before_search():
+    from bot.service import fix_asr_terms
+    assert fix_asr_terms("в рисейле дирекции ИБ") == "в пресейле дирекции ИБ"
+    assert fix_asr_terms("Ресейл и пресейл") == "Пресейл и пресейл"
+    assert fix_asr_terms("сколько дней отпуска") == "сколько дней отпуска"
+
+
+def test_confirmation_and_thanks_do_not_reach_the_app():
+    """«Да» после ответа не вопрос: в приложение (и в службу качества) не уходит."""
+    seen = []
+    svc = BotService(make_settings(), make_api(seen=seen), None)
+    out, reply = collector()
+    for t in ("Да", " да! ", "ок", "Нет.", "Спасибо"):
+        asyncio.run(svc.handle_text(1, t, reply))
+    assert not seen and len(out) == 5
+    assert all("Не удалось" not in x and "службу качества" not in x for x in out)
+
+
+def test_text_answer_is_single_message_without_status_or_escalation():
+    class Reply:
+        def __init__(self):
+            self.sent = []
+
+        async def __call__(self, text, buttons=None):
+            self.sent.append(text)
+
+        async def send(self, text):
+            self.sent.append(text)
+
+        async def edit(self, sent, text, buttons=None):
+            self.sent.append(text)
+            return True
+
+        async def typing(self):
+            return None
+
+    r = Reply()
+    svc = BotService(make_settings(), make_api(), None)
+    asyncio.run(svc.handle_text(1, "Сколько дней отпуска?", r))
+    assert len(r.sent) == 1 and "Источники:" in r.sent[0]
+    assert "Нашла пункты" not in r.sent[0] and "Пишу ответ" not in r.sent[0]

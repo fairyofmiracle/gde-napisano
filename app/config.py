@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     agent_rewrite_penalty: float = 0.05  # оценка, полученная по переформулировке, чуть ниже исходной
     # Числа и даты в ответе модели должны встречаться в процитированных пунктах, иначе — только цитата
     check_numbers: bool = True
+    # Второй агент-проверяющий: отдельный вызов модели сверяет готовый ответ с пунктами и решает —
+    # принять, один раз искать заново или передать вопрос в службу качества. Сбой или таймаут — ответ без изменений
+    verifier_enabled: bool = False
+    verifier_timeout: float = 6.0  # секунд
 
     # LLM
     llm_provider: Literal["gigachat", "ollama", "fake"] = "ollama"
@@ -105,6 +109,8 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5:3b-instruct"
     ollama_num_ctx: int = 8192
     ollama_timeout: float = 180.0
+    # Размышления моделей вроде Qwen3: false — отключить (think=false), пусто — не передавать параметр
+    ollama_think: bool | None = None
     gigachat_credentials: str = Field(default="", repr=False)
     gigachat_scope: str = "GIGACHAT_API_PERS"
     gigachat_model: str = "GigaChat"

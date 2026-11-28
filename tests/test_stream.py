@@ -138,7 +138,7 @@ def test_ollama_stream_collects_text_and_tokens(monkeypatch):
     assert "".join(pieces) == res.text
 
 
-def test_bot_sends_found_clauses_then_edits_with_answer():
+def test_bot_sends_only_final_answer_without_progress_message():
     body = "\n".join([json.dumps({"type": "status", "text": "Ищу в документах"}),
                       json.dumps({"type": "evidence", "items": [{"ref": "x", "clause_no": "3.1",
                                                                   "doc_title": "Положение об отпусках"}]}),
@@ -163,12 +163,15 @@ def test_bot_sends_found_clauses_then_edits_with_answer():
         edits.append((handle, text, buttons))
         return True
 
-    reply.send, reply.edit = send, edit
+    async def typing():
+        return None
+
+    reply.send, reply.edit, reply.typing = send, edit, typing
     svc = BotService(bot_settings(), api, None)
     asyncio.run(svc.handle_text(1, "Сколько дней отпуска?", reply))
-    assert sent and sent[0].startswith("Нашла пункты: п. 3.1 (Положение об отпусках). Пишу ответ")
-    assert len(edits) == 1 and edits[0][0] == "handle" and "Источники:" in edits[0][1]
-    assert len(sent) == 1  # без лишних сообщений
+    assert len(sent) == 1 and "Источники:" in sent[0]  # одно итоговое сообщение
+    assert "Нашла пункты" not in sent[0] and "Пишу ответ" not in sent[0]
+    assert not edits  # промежуточного сообщения нет, править нечего
 
 
 def test_bot_without_edit_support_answers_as_before():

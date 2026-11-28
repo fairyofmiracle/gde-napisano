@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
@@ -29,18 +30,42 @@ MSG_DENIED = ("Этот бот только для сотрудников из �
 MSG_APP_DOWN = "Сервис поиска сейчас недоступен. Попробуйте позже."
 MSG_SHORT = "Вопрос слишком короткий. Напишите хотя бы пару слов."
 MSG_LONG = "Вопрос слишком длинный, максимум 2000 символов."
+MSG_CONFIRM = "Подтверждать ничего не нужно. Задайте вопрос по регламентам текстом или голосовым."
+MSG_THANKS = "Пожалуйста. Если появится вопрос по регламентам, напишите его или запишите голосовым."
 MSG_VOICE_BUSY = "Сейчас распознаётся много голосовых. Подождите минуту или напишите вопрос текстом."
 
 
+_CONFIRM_WORDS = {"да", "нет", "ок", "окей", "ага", "угу", "хорошо", "ладно", "понятно", "ясно", "верно", "точно",
+                  "неверно", "не то", "не так"}
+_THANKS_WORDS = {"спасибо", "спс", "благодарю", "благодарствую", "пасиб"}
+# Типичные ошибки распознавания профильных слов (в регламентах это «пресейл»)
+_ASR_FIXES = ((re.compile(r"\b(ри|ре|при|прес{1,2})сейл", re.IGNORECASE | re.UNICODE), "пресейл"),)
+
+
+def fix_asr_terms(text: str) -> str:
+    out = text
+    for rx, repl in _ASR_FIXES:
+        out = rx.sub(lambda m: (repl.capitalize() if m.group(0)[:1].isupper() else repl), out)
+    return out
+
+
+def _plain_reaction(text: str) -> str | None:
+    """Ответ «да», «спасибо» и т. п. не вопрос по регламентам: в приложение не уходит и заявку не создаёт."""
+    word = re.sub(r"[^\w\s]", "", text.lower()).strip()
+    word = re.sub(r"\s+", " ", word)
+    if word in _CONFIRM_WORDS:
+        return MSG_CONFIRM
+    if word in _THANKS_WORDS:
+        return MSG_THANKS
+    return None
+
+
 class _LiveMessage:
-    """Одно сообщение о ходе ответа: «Нашла пункты: …, пишу ответ», потом оно правится итоговым ответом.
-    Правка одна (итог), промежуточные статусы не шлются, чтобы не упираться в лимиты Telegram;
-    пока ответ готовится, бот показывает «печатает…»."""
+    """Пока ответ готовится, бот показывает «печатает…». Промежуточных сообщений о ходе работы нет:
+    пользователь получает одно итоговое сообщение с ответом, цитатой и источником."""
 
     def __init__(self, reply) -> None:
         self.reply = reply
-        self.handle = None
-        self.refs: list[str] = []
         self._typing = asyncio.create_task(self._keep_typing()) if getattr(reply, "typing", None) else None
 
     async def _keep_typing(self) -> None:
@@ -60,30 +85,7 @@ class _LiveMessage:
             self._typing = None
 
     async def on_event(self, ev: dict) -> None:
-        if ev.get("type") != "evidence" or self.handle is not None:
-            return
-        by_doc: dict[str, list[str]] = {}
-        for it in (ev.get("items") or [])[:3]:
-            title = it.get("doc_title") or it.get("ref") or ""
-            no = it.get("clause_no")
-            by_doc.setdefault(title, [])
-            if no:
-                by_doc[title].append(str(no))
-        refs = [(f"п. {', '.join(nos)} ({title})" if nos else title) for title, nos in by_doc.items() if title or nos]
-        if not refs:
-            return
-        self.refs = refs
-        self.handle = await self.reply.send("Нашла пункты: " + "; ".join(refs) + ". Пишу ответ…")
-
-    async def finish(self, text: str, buttons=None) -> bool:
-        """Правит сообщение итогом. False — сообщения нет или правка не прошла: тогда итог шлётся заново."""
-        if self.handle is None or not getattr(self.reply, "edit", None):
-            return False
-        try:
-            return bool(await self.reply.edit(self.handle, text, buttons))
-        except Exception:
-            log.warning("не удалось заменить сообщение о ходе ответа", exc_info=True)
-            return False
+        return None  # события хода ответа пользователю не показываются
 
 
 class BotService:
@@ -183,17 +185,23 @@ class BotService:
         text = (text or "").strip()
         if not text:
             return await reply("Речь не разобрана. Скажите ещё раз поближе к микрофону или напишите текстом.")
-        await reply(f"Распознано: «{text}»")
-        await self._answer(text, reply, user_id)
+        text = fix_asr_terms(text)
+        # Расшифровка идёт первой строкой итогового сообщения, отдельного сообщения и подтверждения нет
+        await self._answer(text, reply, user_id, heard=text)
 
-    async def _answer(self, question: str, reply: Reply, user_id: int = 0, division: str | None = None) -> None:
+    async def _answer(self, question: str, reply: Reply, user_id: int = 0, division: str | None = None,
+                      heard: str | None = None) -> None:
         question = question.strip()
         if len(question) < 2:
             return await reply(MSG_SHORT)
         if len(question) > 2000:
             return await reply(MSG_LONG)
+        if division is None:
+            hint = _plain_reaction(question)
+            if hint:
+                return await reply(hint)
         session = f"tg-{user_id}" if user_id else None
-        live = _LiveMessage(reply) if getattr(reply, "send", None) and hasattr(self.api, "ask_stream") else None
+        live = _LiveMessage(reply) if getattr(reply, "typing", None) and hasattr(self.api, "ask_stream") else None
         try:
             if live:
                 data = await self.api.ask_stream(question, live.on_event, session_id=session, division=division)
@@ -203,13 +211,14 @@ class BotService:
             return await reply(f"Слишком много вопросов подряд, подождите {e.retry_after} с.")
         except ApiError as e:
             log.error("docagent: %s", e)
-            if live and await live.finish(MSG_APP_DOWN):
-                return None
             return await reply(MSG_APP_DOWN)
         finally:
             if live:
                 live.stop_typing()
-        parts = split_message(format_answer(data, self.settings.web_public_url))
+        body = format_answer(data, self.settings.web_public_url)
+        if heard:
+            body = f"Вопрос: «{heard}»\n\n{body}"
+        parts = split_message(body)
         if data.get("mode") == "clarify" and data.get("clarify"):
             self._pending[user_id] = data["clarify"].get("pending_question") or question
             buttons = [(o["label"], f"div:{o['id']}") for o in data["clarify"].get("options") or []]
@@ -219,15 +228,6 @@ class BotService:
         buttons = None
         if can_simplify(data):
             buttons = [("Не понял", f"simp:{data['answer_id']}")]
-        if live and parts:
-            # итог заменяет сообщение «Нашла пункты…»: первая часть — правкой, остальные — новыми сообщениями
-            if await live.finish(parts[0], buttons if len(parts) == 1 else None):
-                parts = parts[1:]
-                for part in parts[:-1]:
-                    await reply(part)
-                if parts:
-                    await reply(parts[-1], buttons)
-                return None
         for part in parts[:-1]:
             await reply(part)
         if parts:

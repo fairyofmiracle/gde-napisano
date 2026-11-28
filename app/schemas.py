@@ -341,6 +341,8 @@ class ChatOut(_Model):
     glossary: list[dict] = Field(default_factory=list, description="Расшифровка сокращений из глоссария")
     missing_docs: list[str] = Field(default_factory=list, description="Документы, на которые есть ссылка, но их нет в базе")
     conflict: bool = Field(default=False, description="Пункты противоречат друг другу")
+    verifier: dict | None = Field(default=None, description="Вердикт агента-проверяющего (VERIFIER_ENABLED): "
+                                  "verdict ok/retry/escalate/skipped, reason, query, токены и время")
     notice: str | None = Field(default=None, description="Пояснение над ответом (например, о передаче в службу качества)")
     can_simplify: bool = Field(default=False, description="Можно запросить пересказ ответа простыми словами")
 

@@ -32,6 +32,8 @@ ESC_TEXT = ("Не удалось ответить по регламентам, �
 ESC_PARTIAL = "Ниже то, что удалось найти. Это не подтверждённый ответ: сверяйтесь с пунктами."
 ESC_CONFLICT = ("Пункты регламента расходятся, поэтому однозначно ответить нельзя. "
                 "Вопрос передан в службу качества.")
+ESC_VERIFIER = ("Проверяющий агент не подтвердил этот ответ по найденным пунктам, поэтому вопрос передан "
+                "в службу качества. Ниже — ответ и цитаты, сверьтесь с пунктом.")
 BY_DIVISION_TEXT = ("Порядок зависит от подразделения. Ниже — отдельно для каждого, сроки и правила не смешиваю "
                     "и не усредняю.")
 CLARIFY_TEXT = ("Ответ зависит от подразделения: в регламентах {names} это описано по-разному. "
@@ -285,6 +287,8 @@ class Assistant:
         reason = None
         if out.get("conflict"):
             reason = "conflict"
+        elif out.get("verifier_doubt") and mode == "confident":
+            reason = "verifier"
         elif mode == "not_found" and not out.get("no_escalation"):
             reason = "not_found"
         elif mode == "uncertain" and s.escalate_on_uncertain:
@@ -311,6 +315,8 @@ class Assistant:
         ticket = f"Номер заявки: ГН-{esc['id']}."
         if reason == "conflict":
             out["notice"] = ESC_CONFLICT + "\n" + ticket
+        elif reason == "verifier":
+            out["notice"] = ESC_VERIFIER + "\n" + ticket
         elif reason == "low_confidence":
             out["text"] = ESC_TEXT.format(to=to, cc=cc) + "\n" + ticket + "\n" + ESC_PARTIAL
         else:
@@ -341,6 +347,7 @@ class Assistant:
             out["latency_ms"] = int((time.perf_counter() - t0) * 1000)
         cands = out.pop("_candidates", None) or []
         out.pop("no_escalation", None)
+        out.pop("verifier_doubt", None)
         out["outcome"] = outcome
         out["session_id"] = sess.get("session_id") or None
         sd = sess.get("division") or ""
